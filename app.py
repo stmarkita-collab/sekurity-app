@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import re
 import socket
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 # Konfigurasi halaman utama
 st.set_page_config(
@@ -14,7 +15,7 @@ st.set_page_config(
 st.sidebar.markdown("# 🛡️ CyberShield Setup")
 st.sidebar.info("Aplikasi Keamanan Siber berbasis Python & HTML/CSS UI.")
 
-# Template Antarmuka HTML & CSS Kustom
+# Template Antarmuka HTML & CSS Kustom (Diperbarui dengan 4 kartu)
 html_dashboard = """
 <!DOCTYPE html>
 <html lang="id">
@@ -51,7 +52,7 @@ html_dashboard = """
         }
         .grid-container {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 20px;
         }
         .card {
@@ -63,20 +64,21 @@ html_dashboard = """
         .card h2 {
             margin-top: 0;
             color: #ffffff;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 10px;
         }
         .desc {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             color: #8b949e;
             margin-bottom: 15px;
+            min-height: 40px;
         }
         .badge {
             display: inline-block;
             padding: 4px 8px;
             border-radius: 4px;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: bold;
             background-color: var(--accent-color);
             color: #000;
@@ -105,21 +107,27 @@ html_dashboard = """
             <p class="desc">Mengonversi nama domain menjadi alamat IP publik via pencarian DNS.</p>
             <span class="badge">DNS Network</span>
         </div>
+        <div class="card">
+            <h2>📡 4. Network Port Scanner</h2>
+            <p class="desc">Memindai port terbuka pada target host untuk mendeteksi celah paparan layanan.</p>
+            <span class="badge">Socket Recon</span>
+        </div>
     </div>
 </body>
 </html>
 """
 
 # Render komponen UI HTML ke dalam Streamlit
-components.html(html_dashboard, height=380, scrolling=False)
+components.html(html_dashboard, height=320, scrolling=False)
 
 st.markdown("---")
 st.markdown("### 🛠️ Modul Eksekusi Alat Keamanan")
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "🔒 Password Strength Analyzer", 
     "🌐 URL Phishing Detector", 
-    "🔍 IP Domain Scanner"
+    "🔍 IP Domain Scanner",
+    "📡 Network Port Scanner"
 ])
 
 # FITUR 1: Analisis Kata Sandi
@@ -171,7 +179,7 @@ with tab2:
 # FITUR 3: Scanner IP Domain 
 with tab3:
     st.subheader("IP Domain Scanner")
-    domain_input = st.text_input("Masukkan nama domain (Tanpa http://):", placeholder="google.com")
+    domain_input = st.text_input("Masukkan nama domain (Tanpa http://):", placeholder="google.com", key="dns_input")
     if domain_input:
         clean_domain = domain_input.replace("https://", "").replace("http://", "").split("/")[0]
         try:
@@ -180,3 +188,75 @@ with tab3:
             st.metric(label="IP Address Publik Target", value=ip_address)
         except socket.gaierror:
             st.error("❌ **Gagal Resolusi DNS:** Domain tidak valid, tidak aktif, atau salah ketik.")
+
+# FITUR 4: Network Port Scanner (MODUL BARU)
+with tab4:
+    st.subheader("Network Port Scanner")
+    st.markdown("Pindai port-port umum pada server target untuk mengaudit *attack surface* (celah paparan jaringan).")
+    
+    target_host = st.text_input("Masukkan Host Target (IP atau Domain):", placeholder="localhost atau scanme.nmap.org")
+    
+    # Port umum beserta deskripsi layanannya
+    COMMON_PORTS = {
+        21: "FTP (File Transfer)",
+        22: "SSH (Secure Shell)",
+        23: "Telnet (Unencrypted Text)",
+        25: "SMTP (Email Routing)",
+        53: "DNS (Domain Name System)",
+        80: "HTTP (Web Unencrypted)",
+        110: "POP3 (Email Inbox)",
+        443: "HTTPS (Web Encrypted)",
+        3306: "MySQL (Database)",
+        8080: "HTTP Alternative / Proxy"
+    }
+    
+    def check_port(host, port):
+        """Fungsi internal untuk memeriksa apakah sebuah port terbuka"""
+        try:
+            # Set timeout 1 detik agar pemindaian berjalan cepat
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.0)
+            result = s.connect_ex((host, port))
+            s.close()
+            if result == 0:
+                return port, True
+            return port, False
+        except:
+            return port, False
+
+    if st.button("🚀 Mulai Pemindaian Port"):
+        if target_host:
+            # Bersihkan input jika pengguna memasukkan URL lengkap
+            clean_host = target_host.replace("https://", "").replace("http://", "").split("/")[0]
+            
+            try:
+                # Validasi apakah host bisa dijangkau/ditemukan
+                resolved_ip = socket.gethostbyname(clean_host)
+                st.info(f"Memulai pemindaian pada {clean_host} ({resolved_ip})...")
+                
+                open_ports = []
+                progress_bar = st.progress(0)
+                
+                # Menggunakan ThreadPoolExecutor untuk pemindaian multi-threaded (cepat)
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [executor.submit(check_port, resolved_ip, port) for port in COMMON_PORTS.keys()]
+                    
+                    for idx, future in enumerate(futures):
+                        port, is_open = future.result()
+                        if is_open:
+                            open_ports.append(port)
+                        # Perbarui progress bar secara berkala
+                        progress_bar.progress((idx + 1) / len(COMMON_PORTS))
+                
+                # Tampilkan hasil
+                st.markdown("#### 📊 Hasil Pemindaian:")
+                if open_ports:
+for port in open_ports:
+st.markdown(f"🟢 Port {port} ({COMMON_PORTS[port]}) ➡️ TERBUKA (OPEN)")
+st.warning("⚠️ Beberapa port terbuka terdeteksi. Pastikan port tersebut dilindungi oleh Firewall dan layanannya selalu diperbarui (up-to-date).")
+else:
+st.success("🔒 Semua port umum yang diperiksa berstatus TERTUTUP (CLOSED).")
+except socket.gaierror:
+st.error("❌ Error: Host tidak dapat ditemukan atau tidak valid. Silakan periksa kembali penulisan IP/Domain Anda.")
+else:
+st.error("❌ Mohon masukkan host target terlebih dahulu.")
