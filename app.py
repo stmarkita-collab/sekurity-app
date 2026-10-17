@@ -189,12 +189,12 @@ with tab3:
         except socket.gaierror:
             st.error("❌ **Gagal Resolusi DNS:** Domain tidak valid, tidak aktif, atau salah ketik.")
 
-# FITUR 4: Network Port Scanner (MODUL BARU)
+# FITUR 4: Network Port Scanner (SUDAH DIPERBAIKI INDENTASINYA)
 with tab4:
     st.subheader("Network Port Scanner")
     st.markdown("Pindai port-port umum pada server target untuk mengaudit *attack surface* (celah paparan jaringan).")
     
-    target_host = st.text_input("Masukkan Host Target (IP atau Domain):", placeholder="localhost atau scanme.nmap.org")
+    target_host = st.text_input("Masukkan Host Target (IP atau Domain):", placeholder="localhost atau scanme.nmap.org", key="port_input")
     
     # Port umum beserta deskripsi layanannya
     COMMON_PORTS = {
@@ -251,12 +251,13 @@ with tab4:
                 # Tampilkan hasil
                 st.markdown("#### 📊 Hasil Pemindaian:")
                 if open_ports:
-for port in open_ports:
-st.markdown(f"🟢 Port {port} ({COMMON_PORTS[port]}) ➡️ TERBUKA (OPEN)")
-st.warning("⚠️ Beberapa port terbuka terdeteksi. Pastikan port tersebut dilindungi oleh Firewall dan layanannya selalu diperbarui (up-to-date).")
-else:
-st.success("🔒 Semua port umum yang diperiksa berstatus TERTUTUP (CLOSED).")
-except socket.gaierror:
-st.error("❌ Error: Host tidak dapat ditemukan atau tidak valid. Silakan periksa kembali penulisan IP/Domain Anda.")
-else:
-st.error("❌ Mohon masukkan host target terlebih dahulu.")
+                    for port in open_ports:
+                        st.markdown(f"🟢 **Port {port}** ({COMMON_PORTS[port]}) ➡️ **TERBUKA (OPEN)**")
+                    st.warning("⚠️ Beberapa port terbuka terdeteksi. Pastikan port tersebut dilindungi oleh Firewall.")
+                else:
+                    st.success("🔒 Semua port umum yang diperiksa berstatus **TERTUTUP (CLOSED)**.")
+                    
+            except socket.gaierror:
+                st.error("❌ **Error:** Host tidak dapat ditemukan atau tidak valid. Silakan periksa kembali penulisan IP/Domain Anda.")
+        else:
+            st.error("❌ Mohon masukkan host target terlebih dahulu.")
