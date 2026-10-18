@@ -1,10 +1,19 @@
-import streamlit as st
-import streamlit.components.v1 as components
+import os
 import re
 import socket
 import urllib.parse
+
+import certifi
 import requests
+import streamlit as st
+import streamlit.components.v1 as components
 from concurrent.futures import ThreadPoolExecutor
+
+# =========================================================
+# KONFIGURASI SSL GLOBAL (CA Bundle dari certifi)
+# =========================================================
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # =========================================================
 # KONFIGURASI HALAMAN UTAMA
@@ -17,6 +26,41 @@ st.set_page_config(
 
 st.sidebar.markdown("# 🛡️ CyberShield Setup")
 st.sidebar.info("Aplikasi Keamanan Siber berbasis Python & HTML/CSS UI.")
+
+# =========================================================
+# DIAGNOSA SSL DI SIDEBAR
+# =========================================================
+with st.sidebar.expander("🔎 Diagnosa SSL"):
+    st.caption("Uji cepat koneksi HTTPS ke target untuk memeriksa validitas sertifikat.")
+    diag_target = st.text_input(
+        "URL untuk diagnosa:",
+        placeholder="https://example.com",
+        key="diag_ssl_input"
+    )
+    if st.button("Test koneksi SSL", key="diag_ssl_btn"):
+        if not diag_target:
+            st.warning("Masukkan URL terlebih dahulu.")
+        else:
+            test_url = diag_target
+            if not test_url.startswith(("http://", "https://")):
+                test_url = "https://" + test_url
+            try:
+                _ = requests.get(test_url, timeout=5, verify=True)
+                st.success("SSL valid ✅")
+            except requests.exceptions.SSLError as e:
+                st.warning(
+                    "**SSL Error.** Kemungkinan penyebab:\n"
+                    "- Sertifikat kedaluwarsa / self-signed\n"
+                    "- Chain CA tidak lengkap\n"
+                    "- Proxy MITM di jaringan\n\n"
+                    f"Detail: `{e}`"
+                )
+            except requests.exceptions.Timeout:
+                st.error("⏱️ Timeout — server tidak merespons dalam 5 detik.")
+            except requests.exceptions.ConnectionError:
+                st.error("❌ Tidak dapat terhubung ke server.")
+            except Exception as e:
+                st.error(f"Error lain: `{e}`")
 
 # =========================================================
 # TEMPLATE HTML & CSS KUSTOM (5 KARTU)
@@ -337,6 +381,12 @@ with tab5:
         key="web_scan_input"
     )
 
+    ignore_ssl = st.checkbox(
+        "⚠️ Abaikan verifikasi SSL (untuk audit situs dengan sertifikat bermasalah)",
+        value=False,
+        key="ignore_ssl_toggle"
+    )
+
     # Daftar header keamanan yang wajib diperiksa
     SECURITY_HEADERS = {
         "Strict-Transport-Security": {
@@ -365,21 +415,99 @@ with tab5:
             if not web_target.startswith(("http://", "https://")):
                 web_target = "https://" + web_target
 
+            request_headers = {
+                "User-Agent": "Mozilla/5.0 (CyberShield Auditor App)"
+            }
+
+            response = None
+            ssl_verified = True
+            ssl_error_msg = None
+
+            # -------------------------------------------------
+            # TAHAP 1: COBA KONEKSI AMAN (verify=True)
+            # -------------------------------------------------
             try:
                 with st.spinner("Sedang mengirimkan payload audit HTTP request..."):
-                    request_headers = {
-                        "User-Agent": "Mozilla/5.0 (CyberShield Auditor App)"
-                    }
                     response = requests.get(
                         web_target,
                         headers=request_headers,
                         timeout=5,
-                        verify=True
+                        verify=not ignore_ssl  # True = verifikasi, False = abaikan
                     )
 
-                st.success(
-                    f"✅ Berhasil terhubung ke server! Status Code: {response.status_code}"
+            # -------------------------------------------------
+            # TAHAP 2: FALLBACK JIKA SSL ERROR & TOGGLE OFF
+            # -------------------------------------------------
+            except requests.exceptions.SSLError as e:
+                if ignore_ssl:
+                    # User sudah centang "abaikan SSL", tapi masih error.
+                    st.error(
+                        "🚨 SSL Error tetap muncul meski 'Abaikan verifikasi SSL' dicentang.\n\n"
+                        f"Detail: `{e}`"
+                    )
+                    st.stop()
+
+                ssl_verified = False
+                ssl_error_msg = str(e)
+                try:
+                    with st.spinner(
+                        "Sertifikat SSL bermasalah — melanjutkan audit tanpa verifikasi SSL..."
+                    ):
+                        requests.packages.urllib3.disable_warnings(
+                            requests.packages.urllib3.exceptions.InsecureRequestWarning
+                        )
+                        response = requests.get(
+                            web_target,
+                            headers=request_headers,
+                            timeout=5,
+                            verify=False
+                        )
+                except Exception as e2:
+                    st.error(f"❌ Gagal terhubung meski tanpa verifikasi SSL: {e2}")
+                    st.stop()
+
+            except requests.exceptions.Timeout:
+                st.error(
+                    "⏱️ Timeout Error: Web server memakan waktu terlalu lama untuk merespons (RTO)."
                 )
+                st.stop()
+
+            except requests.exceptions.ConnectionError:
+                st.error(
+                    "❌ Connection Error: Gagal terhubung ke server. Periksa URL atau koneksi jaringan."
+                )
+                st.stop()
+
+            except Exception as e:
+                st.error(
+                    f"❌ Gagal Memindai Server: Terjadi gangguan koneksi atau URL salah. ({str(e)})"
+                )
+                st.stop()
+
+            # -------------------------------------------------
+            # TAHAP 3: TAMPILKAN STATUS KONEKSI
+            # -------------------------------------------------
+            if response is not None:
+                if ssl_verified:
+                    if ignore_ssl:
+                        st.warning(
+                            f"⚠️ Berhasil terhubung **tanpa verifikasi SSL** (sesuai toggle). "
+                            f"Status Code: {response.status_code}"
+                        )
+                    else:
+                        st.success(
+                            f"✅ Berhasil terhubung ke server! Status Code: {response.status_code} "
+                            f"(SSL valid ✅)"
+                        )
+                else:
+                    st.warning(
+                        f"⚠️ **Sertifikat SSL tidak valid** — audit dilanjutkan dengan `verify=False`.\n\n"
+                        f"**Detail error:** `{ssl_error_msg}`\n\n"
+                        "Ini bisa berarti: sertifikat **kedaluwarsa**, **self-signed**, "
+                        "**chain tidak lengkap**, atau ada **proxy MITM** di jaringan Anda. "
+                        "Untuk audit header, ini tidak masalah — tetapi **jangan** masukkan "
+                        "data sensitif ke situs ini."
+                    )
 
                 # =========================================
                 # 1. AUDIT BANNER SERVER (Banner Grabbing)
@@ -408,7 +536,9 @@ with tab5:
                 # =========================================
                 # 2. AUDIT SECURITY HEADERS
                 # =========================================
-                st.markdown("#### 🛡️ 2. Analisis Security Headers (Konfigurasi Pengerasan Server)")
+                st.markdown(
+                    "#### 🛡️ 2. Analisis Security Headers (Konfigurasi Pengerasan Server)"
+                )
 
                 col1, col2 = st.columns(2)
 
@@ -437,21 +567,4 @@ with tab5:
                     if not missing_any:
                         st.success(
                             "Luar biasa! Server ini mengimplementasikan semua security headers krusial."
-                        )
-
-            except requests.exceptions.SSLError:
-                st.error(
-                    "🚨 SSL Error: Sertifikat SSL/TLS pada web target tidak valid atau kedaluwarsa."
-                )
-            except requests.exceptions.Timeout:
-                st.error(
-                    "⏱️ Timeout Error: Web server memakan waktu terlalu lama untuk merespons (RTO)."
-                )
-            except requests.exceptions.ConnectionError:
-                st.error(
-                    "❌ Connection Error: Gagal terhubung ke server. Periksa URL atau koneksi jaringan."
-                )
-            except Exception as e:
-                st.error(
-                    f"❌ Gagal Memindai Server: Terjadi gangguan koneksi atau URL salah. ({str(e)})"
 )
