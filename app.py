@@ -1,41 +1,113 @@
 import os
 import re
+import ssl
+import json
+import time
 import socket
+import datetime
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import certifi
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from concurrent.futures import ThreadPoolExecutor
 
 # =========================================================
-# KONFIGURASI SSL GLOBAL (CA Bundle dari certifi)
+# KONFIGURASI SSL GLOBAL
 # =========================================================
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 # =========================================================
-# KONFIGURASI HALAMAN UTAMA
+# KONFIGURASI HALAMAN
 # =========================================================
 st.set_page_config(
-    page_title="CyberShield Web Toolkit",
+    page_title="CyberShield Pro",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.sidebar.markdown("# 🛡️ CyberShield Setup")
-st.sidebar.info("Aplikasi Keamanan Siber berbasis Python & HTML/CSS UI.")
+# =========================================================
+# SESSION STATE INIT
+# =========================================================
+if "scan_history" not in st.session_state:
+    st.session_state.scan_history = []
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = True
+
 
 # =========================================================
-# DIAGNOSA SSL DI SIDEBAR
+# UTILITAS GLOBAL
+# =========================================================
+def clean_target(target: str) -> str:
+    """Normalisasi input host/domain."""
+    return (
+        target.replace("https://", "")
+        .replace("http://", "")
+        .split("/")[0]
+        .split(":")[0]
+        .strip()
+    )
+
+
+def add_history(module: str, target: str, summary: str):
+    """Tambah entri ke riwayat scan."""
+    st.session_state.scan_history.insert(
+        0,
+        {
+            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "module": module,
+            "target": target,
+            "summary": summary,
+        },
+    )
+    st.session_state.scan_history = st.session_state.scan_history[:50]
+
+
+def export_json(data: dict, filename: str) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+
+
+def export_markdown(data: dict, title: str) -> str:
+    lines = [f"# {title}", f"_Generated: {datetime.datetime.now()}_", ""]
+    for key, value in data.items():
+        if isinstance(value, (list, dict)):
+            lines.append(f"## {key}")
+            lines.append(f"```json\n{json.dumps(value, indent=2, ensure_ascii=False, default=str)}\n```")
+        else:
+            lines.append(f"- **{key}**: {value}")
+    return "\n".join(lines)
+
+
+# =========================================================
+# SIDEBAR — KONFIGURASI GLOBAL
+# =========================================================
+st.sidebar.markdown("# 🛡️ CyberShield Pro")
+st.sidebar.caption("Advanced Cybersecurity Toolkit v2.0")
+
+with st.sidebar.expander("⚙️ Pengaturan Global", expanded=False):
+    timeout_val = st.slider("Timeout request (detik)", 2, 30, 8)
+    max_workers = st.slider("Max concurrency (thread)", 1, 50, 20)
+    rate_limit_ms = st.slider("Rate limit antar-request (ms)", 0, 500, 50)
+    user_agent = st.text_input(
+        "User-Agent",
+        value="Mozilla/5.0 (CyberShield Pro Auditor)",
+    )
+
+with st.sidebar.expander("🎨 Tema", expanded=False):
+    st.session_state.dark_mode = st.toggle(
+        "Dark Mode", value=st.session_state.dark_mode
+    )
+
+# =========================================================
+# DIAGNOSA SSL
 # =========================================================
 with st.sidebar.expander("🔎 Diagnosa SSL"):
-    st.caption("Uji cepat koneksi HTTPS ke target untuk memeriksa validitas sertifikat.")
+    st.caption("Uji cepat koneksi HTTPS untuk memeriksa validitas sertifikat.")
     diag_target = st.text_input(
-        "URL untuk diagnosa:",
-        placeholder="https://example.com",
-        key="diag_ssl_input"
+        "URL diagnosa:", placeholder="https://example.com", key="diag_ssl_input"
     )
     if st.button("Test koneksi SSL", key="diag_ssl_btn"):
         if not diag_target:
@@ -45,526 +117,775 @@ with st.sidebar.expander("🔎 Diagnosa SSL"):
             if not test_url.startswith(("http://", "https://")):
                 test_url = "https://" + test_url
             try:
-                _ = requests.get(test_url, timeout=5, verify=True)
+                _ = requests.get(test_url, timeout=timeout_val, verify=True)
                 st.success("SSL valid ✅")
             except requests.exceptions.SSLError as e:
-                st.warning(
-                    "**SSL Error.** Kemungkinan penyebab:\n"
-                    "- Sertifikat kedaluwarsa / self-signed\n"
-                    "- Chain CA tidak lengkap\n"
-                    "- Proxy MITM di jaringan\n\n"
-                    f"Detail: `{e}`"
-                )
+                st.warning(f"**SSL Error.** `{e}`")
             except requests.exceptions.Timeout:
-                st.error("⏱️ Timeout — server tidak merespons dalam 5 detik.")
+                st.error("⏱️ Timeout.")
             except requests.exceptions.ConnectionError:
-                st.error("❌ Tidak dapat terhubung ke server.")
+                st.error("❌ Tidak dapat terhubung.")
             except Exception as e:
                 st.error(f"Error lain: `{e}`")
 
 # =========================================================
-# TEMPLATE HTML & CSS KUSTOM (5 KARTU)
+# RIWAYAT SCAN
 # =========================================================
-html_dashboard = """
+with st.sidebar.expander(f"📜 Riwayat Scan ({len(st.session_state.scan_history)})"):
+    if st.session_state.scan_history:
+        for entry in st.session_state.scan_history[:15]:
+            st.markdown(
+                f"**{entry['time']}** — `{entry['module']}`\n\n"
+                f"↳ `{entry['target']}`\n\n"
+                f"_{entry['summary']}_"
+            )
+            st.divider()
+        if st.button("🗑️ Bersihkan riwayat"):
+            st.session_state.scan_history = []
+            st.rerun()
+    else:
+        st.caption("Belum ada riwayat.")
+
+# =========================================================
+# DASHBOARD HTML (ADAPTIF TERHADAP TEMA)
+# =========================================================
+if st.session_state.dark_mode:
+    bg = "#0d1117"; card_bg = "#161b22"; text = "#c9d1d9"
+    accent = "#58a6ff"; border = "#30363d"; muted = "#8b949e"
+else:
+    bg = "#f6f8fa"; card_bg = "#ffffff"; text = "#24292f"
+    accent = "#0969da"; border = "#d0d7de"; muted = "#57606a"
+
+html_dashboard = f"""
 <!DOCTYPE html>
 <html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        :root {
-            --bg-color: #0d1117;
-            --card-bg: #161b22;
-            --text-color: #c9d1d9;
-            --accent-color: #58a6ff;
-            --danger-color: #ff7b72;
-            --success-color: #56d364;
-            --border-color: #30363d;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            margin: 0;
-            padding: 20px;
-        }
-        .header {
-            text-align: center;
-            padding: 20px 0;
-            border-bottom: 1px solid var(--border-color);
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            color: var(--accent-color);
-            margin: 0 0 10px 0;
-            font-size: 2.3rem;
-        }
-        .grid-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-        .card {
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 15px;
-        }
-        .card h2 {
-            margin-top: 0;
-            color: #ffffff;
-            font-size: 1rem;
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 8px;
-        }
-        .desc {
-            font-size: 0.8rem;
-            color: #8b949e;
-            margin-bottom: 12px;
-            min-height: 45px;
-        }
-        .badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: bold;
-            background-color: var(--accent-color);
-            color: #000;
-        }
-    </style>
+<meta charset="UTF-8">
+<style>
+    body {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        background-color: {bg};
+        color: {text};
+        margin: 0;
+        padding: 18px;
+    }}
+    .header {{ text-align: center; padding: 10px 0 18px; border-bottom: 1px solid {border}; margin-bottom: 22px; }}
+    .header h1 {{ color: {accent}; margin: 0 0 6px; font-size: 2rem; }}
+    .header p {{ color: {muted}; margin: 0; font-size: .85rem; }}
+    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }}
+    .card {{ background-color: {card_bg}; border: 1px solid {border}; border-radius: 8px; padding: 12px; }}
+    .card h2 {{ margin: 0 0 6px; color: {text}; font-size: .9rem; border-bottom: 1px solid {border}; padding-bottom: 6px; }}
+    .desc {{ font-size: .72rem; color: {muted}; margin-bottom: 8px; min-height: 40px; }}
+    .badge {{ display: inline-block; padding: 3px 7px; border-radius: 4px; font-size: .65rem; font-weight: bold; background-color: {accent}; color: #fff; }}
+</style>
 </head>
 <body>
     <div class="header">
-        <h1>🛡️ CyberShield Central Dashboard</h1>
-        <p>Gunakan tab di bawah ini untuk menjalankan pemindaian utilitas keamanan siber.</p>
+        <h1>🛡️ CyberShield Pro Dashboard</h1>
+        <p>Professional-Grade Cybersecurity Toolkit v2.0 — 7 Modul Aktif</p>
     </div>
-
-    <div class="grid-container">
-        <div class="card">
-            <h2>🔒 1. Password Analyzer</h2>
-            <p class="desc">Memeriksa kekuatan kata sandi berdasarkan aturan kompleksitas entropi lokal.</p>
-            <span class="badge">Local Engine</span>
-        </div>
-        <div class="card">
-            <h2>🌐 2. URL Phishing Detector</h2>
-            <p class="desc">Menganalisis indikasi awal phishing pada tautan memakai pendeteksi pola heuristik.</p>
-            <span class="badge">Heuristic Scan</span>
-        </div>
-        <div class="card">
-            <h2>🔍 3. IP Domain Scanner</h2>
-            <p class="desc">Mengonversi nama domain menjadi alamat IP publik via pencarian DNS.</p>
-            <span class="badge">DNS Network</span>
-        </div>
-        <div class="card">
-            <h2>📡 4. Network Port Scanner</h2>
-            <p class="desc">Memindai port terbuka pada target host untuk mendeteksi celah paparan layanan.</p>
-            <span class="badge">Socket Recon</span>
-        </div>
-        <div class="card">
-            <h2>💻 5. Web Server Scanner</h2>
-            <p class="desc">Mengaudit HTTP security headers dan kebocoran informasi banner versi web server.</p>
-            <span class="badge">HTTP Auditor</span>
-        </div>
+    <div class="grid">
+        <div class="card"><h2>🔒 Password Analyzer</h2><p class="desc">Entropi, dictionary check, breach HIBP.</p><span class="badge">Local + HIBP</span></div>
+        <div class="card"><h2>🌐 Phishing Detector</h2><p class="desc">Skor risiko 0-100, typosquat, homoglyph.</p><span class="badge">Heuristic Pro</span></div>
+        <div class="card"><h2>🔍 DNS & IP Intel</h2><p class="desc">Reverse DNS, geo-IP, ASN, CDN detect.</p><span class="badge">OSINT</span></div>
+        <div class="card"><h2>📡 Port Scanner</h2><p class="desc">Range custom, banner grab, concurrent.</p><span class="badge">Socket Recon</span></div>
+        <div class="card"><h2>💻 Web Auditor</h2><p class="desc">10+ security headers, cookie flags.</p><span class="badge">HTTP Audit</span></div>
+        <div class="card"><h2>🔐 SSL/TLS Inspector</h2><p class="desc">Cipher, chain, expiry, SAN.</p><span class="badge">TLS Deep</span></div>
+        <div class="card"><h2>📊 Report Export</h2><p class="desc">JSON / Markdown laporan.</p><span class="badge">Export</span></div>
     </div>
 </body>
 </html>
 """
-
-components.html(html_dashboard, height=280, scrolling=False)
+components.html(html_dashboard, height=310, scrolling=False)
 
 st.markdown("---")
 st.markdown("### 🛠️ Modul Eksekusi Alat Keamanan")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🔒 Password Strength Analyzer",
-    "🌐 URL Phishing Detector",
-    "🔍 IP Domain Scanner",
-    "📡 Network Port Scanner",
-    "💻 Web Server Scanner"
-])
+(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7
+) = st.tabs(
+    [
+        "🔒 Password",
+        "🌐 Phishing",
+        "🔍 DNS/IP",
+        "📡 Port Scan",
+        "💻 Web Audit",
+        "🔐 SSL/TLS",
+        "📊 Report",
+    ]
+)
 
 # =========================================================
-# FITUR 1: PASSWORD STRENGTH ANALYZER
+# FITUR 1: PASSWORD ANALYZER PRO
 # =========================================================
 with tab1:
-    st.subheader("Password Strength Analyzer")
+    st.subheader("🔒 Password Strength Analyzer Pro")
     password = st.text_input(
-        "Masukkan kata sandi yang ingin diuji:",
-        type="password",
-        key="pwd_input"
+        "Masukkan kata sandi:", type="password", key="pwd_input"
     )
 
     if password:
+        # --- Entropi ---
+        charset_size = 0
+        if re.search(r"[a-z]", password): charset_size += 26
+        if re.search(r"[A-Z]", password): charset_size += 26
+        if re.search(r"\d", password): charset_size += 10
+        if re.search(r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]", password): charset_size += 32
+        if re.search(r"[ \t]", password): charset_size += 2
+
+        entropy_bits = len(password) * (charset_size.bit_length() - 1) if charset_size else 0
+        # log2(charset_size) * len
+        import math
+        if charset_size > 1:
+            entropy_bits = math.log2(charset_size) * len(password)
+
+        # --- Estimasi crack time (asumsi GPU 10 miliar hash/detik untuk MD5) ---
+        guesses = 2 ** entropy_bits if entropy_bits < 200 else float("inf")
+        seconds = guesses / 1e10
+        if seconds < 1: crack_time = "Instan ⚡"
+        elif seconds < 60: crack_time = f"{seconds:.1f} detik"
+        elif seconds < 3600: crack_time = f"{seconds/60:.1f} menit"
+        elif seconds < 86400: crack_time = f"{seconds/3600:.1f} jam"
+        elif seconds < 31536000: crack_time = f"{seconds/86400:.1f} hari"
+        elif seconds < 1e9: crack_time = f"{seconds/31536000:.1f} tahun"
+        else: crack_time = "> 1000 tahun 🏆"
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Entropi", f"{entropy_bits:.1f} bits")
+        col2.metric("Panjang", f"{len(password)} karakter")
+        col3.metric("Est. Crack (GPU)", crack_time)
+
+        # --- Skor klasik ---
         score = 0
         feedback = []
+        if len(password) >= 12: score += 1
+        elif len(password) >= 8: feedback.append("💡 Untuk keamanan lebih baik, gunakan ≥ 12 karakter.")
+        else: feedback.append("❌ Minimal 8 karakter.")
 
-        if len(password) >= 8:
-            score += 1
-        else:
-            feedback.append("❌ Panjang kata sandi minimal harus 8 karakter.")
+        if re.search(r"[A-Z]", password) and re.search(r"[a-z]", password): score += 1
+        else: feedback.append("❌ Kombinasikan huruf besar + kecil.")
+        if re.search(r"\d", password): score += 1
+        else: feedback.append("❌ Tambahkan angka.")
+        if re.search(r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]", password): score += 1
+        else: feedback.append("❌ Tambahkan karakter khusus.")
 
-        if re.search(r"[A-Z]", password) and re.search(r"[a-z]", password):
-            score += 1
-        else:
-            feedback.append("❌ Harus mengombinasikan huruf besar (A-Z) dan huruf kecil (a-z).")
+        # --- Deteksi pola umum ---
+        common_patterns = [
+            "password", "123456", "qwerty", "admin", "letmein",
+            "welcome", "monkey", "dragon", "abc123", "111111",
+        ]
+        if any(p in password.lower() for p in common_patterns):
+            score = max(0, score - 2)
+            feedback.append("🚨 Mengandung pola password yang sangat umum dipakai.")
 
-        if re.search(r"\d", password):
-            score += 1
-        else:
-            feedback.append("❌ Harus mengandung setidaknya satu angka (0-9).")
+        if re.search(r"(.)\1{2,}", password):
+            score = max(0, score - 1)
+            feedback.append("⚠️ Mengandung karakter berulang (mis. 'aaa').")
 
-        if re.search(r"[@$!%*?&]", password):
-            score += 1
-        else:
-            feedback.append("❌ Harus mengandung karakter khusus (@, $, !, %, *, ?, &).")
+        if re.search(r"(012|123|234|345|456|567|678|789|abc|bcd|cde)", password.lower()):
+            score = max(0, score - 1)
+            feedback.append("⚠️ Mengandung urutan sekuensial (mis. '123', 'abc').")
 
-        if score == 4:
-            st.success("💪 **Kategori: SANGAT KUAT** (Memenuhi standar keamanan)")
-        elif score == 3:
-            st.warning("⚠️ **Kategori: SEDANG** (Tambahkan elemen yang kurang)")
+        # --- Tampilkan kategori ---
+        if score >= 4 and entropy_bits >= 60:
+            st.success("💪 **SANGAT KUAT**")
+        elif score >= 3 and entropy_bits >= 40:
+            st.warning("⚠️ **SEDANG**")
         else:
-            st.error("🚨 **Kategori: LEMAH** (Mudah diretas brute-force!)")
+            st.error("🚨 **LEMAH**")
 
         for hint in feedback:
             st.write(hint)
 
+        # --- HaveIBeenPwned k-anonymity ---
+        st.markdown("#### 🔎 Cek Kebocoran (HaveIBeenPwned)")
+        if st.button("Periksa di HIBP", key="hibp_btn"):
+            try:
+                import hashlib
+                sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
+                prefix, suffix = sha1[:5], sha1[5:]
+                url = f"https://api.pwnedpasswords.com/range/{prefix}"
+                with st.spinner("Menghubungi HIBP..."):
+                    r = requests.get(url, timeout=timeout_val)
+                if r.status_code == 200:
+                    for line in r.text.splitlines():
+                        if line.startswith(suffix):
+                            count = line.split(":")[1]
+                            st.error(
+                                f"🚨 **KATA SANDI BOCOR!** Ditemukan **{count}** kali dalam data breach publik. Segera ganti!"
+                            )
+                            break
+                    else:
+                        st.success("✅ Tidak ditemukan dalam database kebocoran HIBP.")
+                else:
+                    st.warning(f"HIBP response: {r.status_code}")
+            except Exception as e:
+                st.error(f"❌ Gagal cek HIBP: {e}")
+
+        add_history("Password", "***", f"Entropy {entropy_bits:.0f} bits, score {score}/4")
+
 # =========================================================
-# FITUR 2: URL PHISHING DETECTOR
+# FITUR 2: URL PHISHING DETECTOR PRO
 # =========================================================
 with tab2:
-    st.subheader("URL Phishing Detector")
+    st.subheader("🌐 URL Phishing Detector Pro")
     url_input = st.text_input(
-        "Masukkan tautan/URL untuk dianalisis:",
-        placeholder="https://secure-login-bank-verification.com"
+        "Masukkan URL:",
+        placeholder="https://secure-login-bank-verification.com",
+        key="url_input",
     )
 
     if url_input:
         reasons = []
-        parsed_url = urllib.parse.urlparse(url_input)
-        domain = parsed_url.netloc if parsed_url.netloc else parsed_url.path
+        risk_score = 0
 
-        if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", domain):
-            reasons.append("⚠️ Menggunakan alamat IP langsung sebagai domain alih-alih nama teks.")
+        parsed = urllib.parse.urlparse(url_input)
+        domain = parsed.netloc or parsed.path
+        host = domain.split(":")[0]
 
+        # 1. IP-based
+        if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+            reasons.append("⚠️ Domain berupa alamat IP langsung.")
+            risk_score += 20
+
+        # 2. Panjang URL
         if len(url_input) > 75:
-            reasons.append("⚠️ Struktur tautan mencurigakan karena terlalu panjang.")
+            reasons.append(f"⚠️ URL terlalu panjang ({len(url_input)} char).")
+            risk_score += 10
+        if len(url_input) > 150:
+            risk_score += 10
 
+        # 3. Kata kunci phishing
         suspicious_keywords = [
-            "login", "verify", "secure", "banking",
-            "update-account", "giveaway", "free"
+            "login", "verify", "secure", "banking", "update-account",
+            "giveaway", "free", "gift", "prize", "confirm", "signin",
+            "account", "password", "reset", "urgent", "winner",
         ]
-        found_keywords = [kw for kw in suspicious_keywords if kw in url_input.lower()]
-        if found_keywords:
-            reasons.append(
-                f"⚠️ Mengandung kata kunci sensitif pancingan: {', '.join(found_keywords)}"
-            )
+        found = [kw for kw in suspicious_keywords if kw in url_input.lower()]
+        if found:
+            reasons.append(f"⚠️ Kata kunci mencurigakan: `{', '.join(found)}`")
+            risk_score += min(30, len(found) * 8)
 
+        # 4. HTTP plaintext
         if url_input.startswith("http://"):
-            reasons.append("🚨 Tidak menggunakan sertifikat SSL aman (Protokol HTTP biasa).")
+            reasons.append("🚨 Tidak pakai HTTPS.")
+            risk_score += 25
 
-        if len(reasons) >= 2 or any("🚨" in r for r in reasons):
-            st.error("🚨 **Peringatan: Terindikasi Risiko Tinggi Phishing!**")
+        # 5. Jumlah subdomain
+        subdomain_count = host.count(".") - 1
+        if subdomain_count >= 3:
+            reasons.append(f"⚠️ Subdomain bertingkat berlebihan ({subdomain_count} level).")
+            risk_score += 15
+
+        # 6. Panjang TLD aneh / TLD mencurigakan
+        risky_tlds = [".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".zip", ".country"]
+        if any(host.endswith(t) for t in risky_tlds):
+            reasons.append(f"⚠️ TLD berisiko tinggi (`{host.split('.')[-1]}`).")
+            risk_score += 20
+
+        # 7. Karakter @ di URL (classic trick)
+        if "@" in url_input:
+            reasons.append("🚨 Mengandung '@' — sering dipakai untuk menyembunyikan domain asli.")
+            risk_score += 25
+
+        # 8. Typosquatting (Levenshtein ringan ke brand populer)
+        def levenshtein(a, b):
+            if len(a) < len(b): a, b = b, a
+            if not b: return len(a)
+            prev = list(range(len(b) + 1))
+            for i, ca in enumerate(a, 1):
+                cur = [i]
+                for j, cb in enumerate(b, 1):
+                    cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+                prev = cur
+            return prev[-1]
+
+        popular_brands = [
+            "google", "facebook", "paypal", "amazon", "microsoft",
+            "apple", "netflix", "bank", "bca", "mandiri", "bri", "bni",
+        ]
+        domain_base = host.split(".")[0] if host else ""
+        for brand in popular_brands:
+            if brand in domain_base:
+                continue
+            if len(domain_base) >= 4 and levenshtein(domain_base.lower(), brand) <= 2:
+                reasons.append(f"⚠️ Domain sangat mirip dengan brand populer `{brand}` (typosquatting).")
+                risk_score += 30
+                break
+
+        # 9. Homoglyph (karakter pengganti huruf)
+        homoglyphs = ["0", "1", "rn", "vv", "l"]
+        if any(h in domain_base.lower() for h in homoglyphs) and re.search(r"[a-z]", domain_base):
+            reasons.append("⚠️ Kemungkinan homoglyph (huruf disamarkan, mis. 'rn'→'m').")
+            risk_score += 10
+
+        # Cap risk score
+        risk_score = min(100, risk_score)
+
+        st.markdown("#### 📊 Skor Risiko")
+        st.progress(risk_score / 100)
+        if risk_score >= 70:
+            st.error(f"🚨 **RISIKO TINGGI — {risk_score}/100**")
+        elif risk_score >= 40:
+            st.warning(f"⚠️ **RISIKO SEDANG — {risk_score}/100**")
         else:
-            st.success("✅ **Hasil Analisis: Indikasi Phishing Rendah**")
+            st.success(f"✅ **RISIKO RENDAH — {risk_score}/100**")
 
-        for res in reasons:
-            st.write(res)
+        if reasons:
+            st.markdown("#### 🔍 Detail Temuan")
+            for r in reasons:
+                st.write(r)
+        else:
+            st.info("Tidak ada indikator mencurigakan yang terdeteksi.")
+
+        add_history("Phishing", url_input[:50], f"Risk {risk_score}/100")
 
 # =========================================================
-# FITUR 3: IP DOMAIN SCANNER
+# FITUR 3: DNS & IP INTEL
 # =========================================================
 with tab3:
-    st.subheader("IP Domain Scanner")
+    st.subheader("🔍 DNS & IP Intelligence")
     domain_input = st.text_input(
-        "Masukkan nama domain (Tanpa http://):",
-        placeholder="google.com",
-        key="dns_input"
+        "Domain target:", placeholder="google.com", key="dns_input"
     )
 
     if domain_input:
-        clean_domain = (
-            domain_input
-            .replace("https://", "")
-            .replace("http://", "")
-            .split("/")[0]
-        )
+        clean = clean_target(domain_input)
         try:
-            ip_address = socket.gethostbyname(clean_domain)
-            st.success("🌐 **Domain Aktif Terbaca!**")
-            st.metric(label="IP Address Publik Target", value=ip_address)
+            ip_address = socket.gethostbyname(clean)
+            col1, col2 = st.columns(2)
+            col1.metric("IP Address", ip_address)
+
+            # Reverse DNS
+            try:
+                rev_dns = socket.gethostbyaddr(ip_address)[0]
+            except Exception:
+                rev_dns = "(tidak ada PTR record)"
+            col2.metric("Reverse DNS", rev_dns[:40])
+
+            # Geo-IP via ip-api.com (gratis, no key)
+            st.markdown("#### 🌍 Geolokasi & ASN")
+            try:
+                r = requests.get(
+                    f"http://ip-api.com/json/{ip_address}?fields=status,country,regionName,city,isp,org,as,query",
+                    timeout=timeout_val,
+                )
+                geo = r.json()
+                if geo.get("status") == "success":
+                    gc1, gc2, gc3 = st.columns(3)
+                    gc1.metric("Negara", geo.get("country", "-"))
+                    gc2.metric("Kota", geo.get("city", "-"))
+                    gc3.metric("ISP", geo.get("isp", "-")[:25])
+                    st.code(f"ASN: {geo.get('as', '-')}\nOrg: {geo.get('org', '-')}", language="text")
+                else:
+                    st.warning("Geo-IP lookup gagal.")
+            except Exception as e:
+                st.warning(f"Geo-IP error: {e}")
+
+            # Deteksi CDN/Cloud populer
+            st.markdown("#### ☁️ Deteksi CDN / Cloud")
+            cloud_ranges = {
+                "Cloudflare": ["104.", "172.6", "172.7", "188.114", "162.158", "173.245"],
+                "AWS": ["52.", "54.", "3.", "13.", "18."],
+                "Google Cloud": ["34.", "35.", "104.196", "104.197"],
+                "Azure": ["20.", "40.", "13.64", "13.65"],
+            }
+            detected = []
+            for cdn, prefixes in cloud_ranges.items():
+                if any(ip_address.startswith(p) for p in prefixes):
+                    detected.append(cdn)
+            if detected:
+                st.info(f"🌐 Kemungkinan di belakang: **{', '.join(detected)}**")
+            else:
+                st.caption("Tidak terdeteksi sebagai CDN/Cloud populer (bisa jadi direct hosting atau provider lain).")
+
+            add_history("DNS/IP", clean, f"→ {ip_address}")
+
         except socket.gaierror:
-            st.error(
-                "❌ **Gagal Resolusi DNS:** Domain tidak valid, tidak aktif, atau salah ketik."
-            )
+            st.error("❌ Gagal resolusi DNS: domain tidak valid / tidak aktif.")
 
 # =========================================================
-# FITUR 4: NETWORK PORT SCANNER
+# FITUR 4: PORT SCANNER PRO
 # =========================================================
 with tab4:
-    st.subheader("Network Port Scanner")
-    st.markdown(
-        "Pindai port-port umum pada server target untuk mengaudit *attack surface*."
-    )
+    st.subheader("📡 Network Port Scanner Pro")
+    st.caption("Scan range port custom dengan banner grabbing & rate limiting.")
 
     target_host = st.text_input(
-        "Masukkan Host Target (IP atau Domain):",
-        placeholder="scanme.nmap.org",
-        key="port_input"
+        "Host target:", placeholder="scanme.nmap.org", key="port_input"
     )
+    col_p1, col_p2 = st.columns(2)
+    port_start = col_p1.number_input("Port awal", 1, 65535, 1, key="pstart")
+    port_end = col_p2.number_input("Port akhir", 1, 65535, 1024, key="pend")
 
-    COMMON_PORTS = {
-        21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
-        80: "HTTP", 110: "POP3", 443: "HTTPS", 3306: "MySQL", 8080: "Proxy"
+    PRESET = st.selectbox(
+        "Preset cepat:",
+        ["Custom", "Top 20", "Web (80-443)", "Common DB", "Well-known (1-1024)"],
+        key="preset_ports",
+    )
+    presets = {
+        "Top 20": [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 1433, 3306, 3389, 5432, 8080, 8443],
+        "Web (80-443)": [80, 81, 443, 8000, 8080, 8443, 8888],
+        "Common DB": [1433, 1521, 27017, 3306, 5432, 6379, 9042, 11211],
+        "Well-known (1-1024)": list(range(1, 1025)),
     }
 
-    def check_port(host, port):
+    def grab_banner(ip, port):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.5)
+            s.connect((ip, port))
+            s.settimeout(1.0)
+            try:
+                s.send(b"\r\n")
+                banner = s.recv(1024).decode(errors="ignore").strip()
+            except Exception:
+                banner = ""
+            s.close()
+            return banner[:100] if banner else ""
+        except Exception:
+            return ""
+
+    def check_port_full(ip, port):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(1.0)
-            result = s.connect_ex((host, port))
+            result = s.connect_ex((ip, port))
             s.close()
-            return port, result == 0
+            if result == 0:
+                time.sleep(rate_limit_ms / 1000)
+                banner = grab_banner(ip, port)
+                return port, True, banner
+            return port, False, ""
         except Exception:
-            return port, False
+            return port, False, ""
 
-    if st.button("🚀 Mulai Pemindaian Port"):
-        if target_host:
-            clean_host = (
-                target_host
-                .replace("https://", "")
-                .replace("http://", "")
-                .split("/")[0]
-            )
+    if st.button("🚀 Mulai Scan Port", key="btn_scan_port"):
+        if not target_host:
+            st.error("❌ Masukkan host target.")
+        else:
+            clean_host = clean_target(target_host)
             try:
                 resolved_ip = socket.gethostbyname(clean_host)
-                st.info(f"Memulai pemindaian pada {clean_host} ({resolved_ip})...")
-                open_ports = []
-                progress_bar = st.progress(0)
-
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = [
-                        executor.submit(check_port, resolved_ip, port)
-                        for port in COMMON_PORTS.keys()
-                    ]
-                    for idx, future in enumerate(futures):
-                        port, is_open = future.result()
-                        if is_open:
-                            open_ports.append(port)
-                        progress_bar.progress((idx + 1) / len(COMMON_PORTS))
-
-                st.markdown("#### 📊 Hasil Pemindaian:")
-                if open_ports:
-                    for port in open_ports:
-                        st.markdown(
-                            f"🟢 **Port {port}** ({COMMON_PORTS[port]}) ➡️ **TERBUKA (OPEN)**"
-                        )
+                if PRESET != "Custom":
+                    ports_to_scan = presets[PRESET]
                 else:
-                    st.success("🔒 Semua port umum berstatus TERTUTUP.")
+                    ports_to_scan = list(range(int(port_start), int(port_end) + 1))
+
+                st.info(
+                    f"Memindai **{len(ports_to_scan)}** port pada `{clean_host}` ({resolved_ip})..."
+                )
+                progress = st.progress(0)
+                open_results = []
+                start_ts = time.time()
+
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = {ex.submit(check_port_full, resolved_ip, p): p for p in ports_to_scan}
+                    for idx, fut in enumerate(as_completed(futures)):
+                        port, is_open, banner = fut.result()
+                        if is_open:
+                            open_results.append({"port": port, "banner": banner})
+                        progress.progress((idx + 1) / len(ports_to_scan))
+
+                elapsed = time.time() - start_ts
+                st.markdown(f"#### 📊 Hasil ({len(open_results)} port terbuka, {elapsed:.1f}s)")
+
+                if open_results:
+                    for item in sorted(open_results, key=lambda x: x["port"]):
+                        banner_txt = f" — `{item['banner']}`" if item["banner"] else ""
+                        st.markdown(f"🟢 **Port {item['port']}**{banner_txt}")
+                else:
+                    st.success("🔒 Tidak ada port terbuka terdeteksi.")
+
+                add_history(
+                    "Port Scan", clean_host, f"{len(open_results)} open / {len(ports_to_scan)} scanned"
+                )
+
             except socket.gaierror:
                 st.error("❌ Host tidak valid.")
-        else:
-            st.error("❌ Masukkan host target.")
 
 # =========================================================
-# FITUR 5: WEB SERVER VULNERABILITY & HEADER AUDITOR
+# FITUR 5: WEB SERVER AUDITOR PRO
 # =========================================================
 with tab5:
-    st.subheader("💻 Web Server Vulnerability & Header Auditor")
-    st.markdown(
-        "Melakukan audit konfigurasi dan analisis kerentanan dasar pada respons header web server."
-    )
+    st.subheader("💻 Web Server Auditor Pro")
+    st.caption("Audit 10+ security headers, cookie flags, dan file konfigurasi penting.")
 
     web_target = st.text_input(
-        "Masukkan URL Web Target Lengkap:",
-        placeholder="https://example.com",
-        key="web_scan_input"
+        "URL target:", placeholder="https://example.com", key="web_scan_input"
     )
-
     ignore_ssl = st.checkbox(
-        "⚠️ Abaikan verifikasi SSL (untuk audit situs dengan sertifikat bermasalah)",
-        value=False,
-        key="ignore_ssl_toggle"
+        "⚠️ Abaikan verifikasi SSL", value=False, key="ignore_ssl_toggle"
     )
 
-    # Daftar header keamanan yang wajib diperiksa
     SECURITY_HEADERS = {
-        "Strict-Transport-Security": {
-            "desc": "Memaksa browser menggunakan HTTPS aman (HSTS).",
-            "impact": "Jika absen, web rentan terhadap serangan Man-in-the-Middle (MitM) / SSL Strip."
-        },
-        "X-Frame-Options": {
-            "desc": "Mencegah situs web Anda dimuat di dalam iframe situs lain.",
-            "impact": "Jika absen, penyerang bisa melakukan eksploitasi Clickjacking untuk menjebak klik pengguna."
-        },
-        "X-Content-Type-Options": {
-            "desc": "Mengunci tipe MIME agar browser tidak menebak-nebak tipe file (nosniff).",
-            "impact": "Jika absen, rentan terhadap eksploitasi Cross-Site Scripting (XSS) lewat eksekusi file samaran."
-        },
-        "Content-Security-Policy": {
-            "desc": "Membatasi sumber daya (skrip/gambar) mana saja yang boleh dimuat.",
-            "impact": "Jika absen, penyerang dapat menyuntikkan skrip berbahaya (XSS) secara bebas."
-        }
+        "Strict-Transport-Security": "HSTS — cegah MitM/SSL strip.",
+        "X-Frame-Options": "Anti-Clickjacking.",
+        "X-Content-Type-Options": "Cegah MIME-sniffing XSS.",
+        "Content-Security-Policy": "Batasi sumber resource, cegah XSS.",
+        "Referrer-Policy": "Kontrol info referrer yang bocor.",
+        "Permissions-Policy": "Batasi akses fitur browser (kamera, mic).",
+        "X-XSS-Protection": "Legacy XSS filter (opsional).",
+        "Cross-Origin-Opener-Policy": "Isolasi window lintas origin.",
+        "Cross-Origin-Resource-Policy": "Batasi resource cross-origin.",
+        "Cross-Origin-Embedder-Policy": "Isolasi embed lintas origin.",
     }
 
-    if st.button("🔍 Audit Keamanan Web Server"):
+    if st.button("🔍 Audit Web Server", key="btn_web_audit"):
         if not web_target:
-            st.error("❌ Mohon masukkan URL web target terlebih dahulu.")
+            st.error("❌ Masukkan URL target.")
         else:
-            # Normalisasi URL
             if not web_target.startswith(("http://", "https://")):
                 web_target = "https://" + web_target
 
-            request_headers = {
-                "User-Agent": "Mozilla/5.0 (CyberShield Auditor App)"
-            }
-
+            req_headers = {"User-Agent": user_agent}
             response = None
             ssl_verified = True
             ssl_error_msg = None
 
-            # -------------------------------------------------
-            # TAHAP 1: COBA KONEKSI AMAN (verify=True)
-            # -------------------------------------------------
+            # --- Koneksi aman dulu ---
             try:
-                with st.spinner("Sedang mengirimkan payload audit HTTP request..."):
+                with st.spinner("Mengirim request audit..."):
                     response = requests.get(
                         web_target,
-                        headers=request_headers,
-                        timeout=5,
-                        verify=not ignore_ssl  # True = verifikasi, False = abaikan
+                        headers=req_headers,
+                        timeout=timeout_val,
+                        verify=not ignore_ssl,
+                        allow_redirects=True,
                     )
-
-            # -------------------------------------------------
-            # TAHAP 2: FALLBACK JIKA SSL ERROR & TOGGLE OFF
-            # -------------------------------------------------
             except requests.exceptions.SSLError as e:
-                if ignore_ssl:
-                    # User sudah centang "abaikan SSL", tapi masih error.
-                    st.error(
-                        "🚨 SSL Error tetap muncul meski 'Abaikan verifikasi SSL' dicentang.\n\n"
-                        f"Detail: `{e}`"
-                    )
-                    st.stop()
-
                 ssl_verified = False
                 ssl_error_msg = str(e)
                 try:
-                    with st.spinner(
-                        "Sertifikat SSL bermasalah — melanjutkan audit tanpa verifikasi SSL..."
-                    ):
+                    with st.spinner("SSL bermasalah, fallback tanpa verifikasi..."):
                         requests.packages.urllib3.disable_warnings(
                             requests.packages.urllib3.exceptions.InsecureRequestWarning
                         )
                         response = requests.get(
                             web_target,
-                            headers=request_headers,
-                            timeout=5,
-                            verify=False
+                            headers=req_headers,
+                            timeout=timeout_val,
+                            verify=False,
+                            allow_redirects=True,
                         )
                 except Exception as e2:
-                    st.error(f"❌ Gagal terhubung meski tanpa verifikasi SSL: {e2}")
+                    st.error(f"❌ Gagal meski fallback: {e2}")
                     st.stop()
-
             except requests.exceptions.Timeout:
-                st.error(
-                    "⏱️ Timeout Error: Web server memakan waktu terlalu lama untuk merespons (RTO)."
-                )
-                st.stop()
-
+                st.error("⏱️ Timeout."); st.stop()
             except requests.exceptions.ConnectionError:
-                st.error(
-                    "❌ Connection Error: Gagal terhubung ke server. Periksa URL atau koneksi jaringan."
-                )
-                st.stop()
-
+                st.error("❌ Tidak dapat terhubung."); st.stop()
             except Exception as e:
-                st.error(
-                    f"❌ Gagal Memindai Server: Terjadi gangguan koneksi atau URL salah. ({str(e)})"
-                )
-                st.stop()
+                st.error(f"❌ Error: {e}"); st.stop()
 
-            # -------------------------------------------------
-            # TAHAP 3: TAMPILKAN STATUS KONEKSI
-            # -------------------------------------------------
+            # --- Status ---
             if response is not None:
                 if ssl_verified:
-                    if ignore_ssl:
-                        st.warning(
-                            f"⚠️ Berhasil terhubung **tanpa verifikasi SSL** (sesuai toggle). "
-                            f"Status Code: {response.status_code}"
-                        )
-                    else:
-                        st.success(
-                            f"✅ Berhasil terhubung ke server! Status Code: {response.status_code} "
-                            f"(SSL valid ✅)"
-                        )
+                    st.success(
+                        f"✅ Terhubung! Status: {response.status_code} (SSL valid ✅)"
+                    )
                 else:
                     st.warning(
-                        f"⚠️ **Sertifikat SSL tidak valid** — audit dilanjutkan dengan `verify=False`.\n\n"
-                        f"**Detail error:** `{ssl_error_msg}`\n\n"
-                        "Ini bisa berarti: sertifikat **kedaluwarsa**, **self-signed**, "
-                        "**chain tidak lengkap**, atau ada **proxy MITM** di jaringan Anda. "
-                        "Untuk audit header, ini tidak masalah — tetapi **jangan** masukkan "
-                        "data sensitif ke situs ini."
+                        f"⚠️ SSL tidak valid — audit lanjut. Detail: `{ssl_error_msg}`"
                     )
 
-                # =========================================
-                # 1. AUDIT BANNER SERVER (Banner Grabbing)
-                # =========================================
-                st.markdown("#### 📢 1. Kebocoran Informasi Banner Server")
-                server_header = response.headers.get("Server")
-                x_powered_by = response.headers.get("X-Powered-By")
-
-                if server_header:
-                    st.error(
-                        f"🚨 Server Terbongkar: Menggunakan teknologi **{server_header}**. "
-                        "(Disarankan menyembunyikan banner ini di konfigurasi web server "
-                        "agar peretas tidak tahu versi software Anda)."
-                    )
+                st.markdown("#### 📢 Banner Server")
+                b1, b2 = st.columns(2)
+                srv = response.headers.get("Server")
+                xpb = response.headers.get("X-Powered-By")
+                b1.metric("Server", srv or "(hidden)")
+                b2.metric("X-Powered-By", xpb or "(hidden)")
+                if srv or xpb:
+                    st.error("🚨 Banner server terbuka — disarankan disembunyikan.")
                 else:
-                    st.success("✅ Aman: Header 'Server' tidak ditemukan atau disembunyikan.")
+                    st.success("✅ Banner server tersembunyi.")
 
-                if x_powered_by:
-                    st.error(
-                        f"🚨 Informasi Backend Bocor: Menggunakan komponen pemrograman "
-                        f"**{x_powered_by}**."
-                    )
+                st.markdown("#### 🛡️ Security Headers")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("🟢 **Ditemukan:**")
+                    found = False
+                    for h, desc in SECURITY_HEADERS.items():
+                        if h in response.headers:
+                            st.write(f"🔹 **{h}**")
+                            st.caption(desc)
+                            found = True
+                    if not found:
+                        st.info("Tidak ada security headers yang terdeteksi!")
+                with col2:
+                    st.markdown("🚨 **Absen:**")
+                    missing = False
+                    for h, desc in SECURITY_HEADERS.items():
+                        if h not in response.headers:
+                            st.write(f"⚠️ **{h}**")
+                            st.caption(desc)
+                            missing = True
+                    if not missing:
+                        st.success("Luar biasa! Semua header terpasang.")
+
+                st.markdown("#### 🍪 Cookie Security Flags")
+                cookies = response.cookies
+                if cookies:
+                    for c in cookies:
+                        flags = []
+                        if c.secure: flags.append("Secure ✅")
+                        else: flags.append("Secure ❌")
+                        has_httponly = "HttpOnly" in (c._rest or {})
+                        flags.append("HttpOnly ✅" if has_httponly else "HttpOnly ❌")
+                        st.write(f"🍪 `{c.name}` — " + ", ".join(flags))
                 else:
-                    st.success("✅ Aman: Header 'X-Powered-By' tidak ditemukan.")
+                    st.caption("Tidak ada cookie yang di-set oleh server.")
 
-                # =========================================
-                # 2. AUDIT SECURITY HEADERS
-                # =========================================
-                st.markdown(
-                    "#### 🛡️ 2. Analisis Security Headers (Konfigurasi Pengerasan Server)"
-                )
+                st.markdown("#### 📁 File Konfigurasi Publik")
+                base_url = f"{urllib.parse.urlparse(web_target).scheme}://{urllib.parse.urlparse(web_target).netloc}"
+                check_paths = [
+                    ("robots.txt", "/robots.txt"),
+                    ("security.txt", "/.well-known/security.txt"),
+                    ("sitemap.xml", "/sitemap.xml"),
+                ]
+                for name, path in check_paths:
+                    try:
+                        r = requests.get(
+                            base_url + path,
+                            timeout=timeout_val,
+                            verify=not ignore_ssl,
+                            headers=req_headers,
+                        )
+                        if r.status_code == 200:
+                            st.success(f"✅ `{path}` ditemukan ({len(r.content)} bytes)")
+                            with st.expander(f"Lihat isi {name}"):
+                                st.code(r.text[:2000], language="text")
+                        else:
+                            st.caption(f"➖ `{path}` — HTTP {r.status_code}")
+                    except Exception:
+                        st.caption(f"➖ `{path}` — gagal diakses")
+
+                add_history("Web Audit", web_target[:50], f"HTTP {response.status_code}")
+
+# =========================================================
+# FITUR 6: SSL/TLS INSPECTOR
+# =========================================================
+with tab6:
+    st.subheader("🔐 SSL/TLS Certificate Inspector")
+    st.caption("Periksa cipher, versi TLS, expiry, issuer, dan chain.")
+
+    ssl_target = st.text_input(
+        "Host target (tanpa https://):",
+        placeholder="example.com",
+        key="ssl_input",
+    )
+
+    if st.button("🔐 Inspeksi SSL/TLS", key="btn_ssl_inspect"):
+        if not ssl_target:
+            st.error("❌ Masukkan host target.")
+        else:
+            host = clean_target(ssl_target)
+            port = 443
+            try:
+                ctx = ssl.create_default_context()
+                with socket.create_connection((host, port), timeout=timeout_val) as sock:
+                    with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                        cert = ssock.getpeercert()
+                        cipher = ssock.cipher()
+                        version = ssock.version()
+
+                st.success(f"✅ Berhasil terkoneksi ke `{host}:{port}`")
 
                 col1, col2 = st.columns(2)
+                col1.metric("TLS Version", version or "-")
+                col2.metric("Cipher", cipher[0] if cipher else "-")
 
-                with col1:
-                    st.markdown("🟢 **Header Ditemukan (Aman):**")
-                    found_any = False
-                    for h_name, h_info in SECURITY_HEADERS.items():
-                        if h_name in response.headers:
-                            st.write(f"🔹 **{h_name}**")
-                            st.caption(f"{h_info['desc']}")
-                            found_any = True
-                    if not found_any:
-                        st.info("Tidak ada security headers penting yang terdeteksi.")
+                st.markdown("#### 📜 Detail Sertifikat")
+                subject = dict(x[0] for x in cert.get("subject", ()))
+                issuer = dict(x[0] for x in cert.get("issuer", ()))
 
-                with col2:
-                    st.markdown("🚨 **Header Absen (Celah Kerentanan):**")
-                    missing_any = False
-                    for h_name, h_info in SECURITY_HEADERS.items():
-                        if h_name not in response.headers:
-                            st.write(f"⚠️ **{h_name}** Missing")
-                            st.markdown(
-                                f"Risiko: {h_info['impact']}",
-                                unsafe_allow_html=True
-                            )
-                            missing_any = True
-                    if not missing_any:
-                        st.success(
-                            "Luar biasa! Server ini mengimplementasikan semua security headers krusial."
-)
+                st.write(f"**Common Name (CN):** `{subject.get('commonName', '-')}`")
+                st.write(f"**Organisasi:** `{subject.get('organizationName', '-')}`")
+                st.write(f"**Issuer (CA):** `{issuer.get('commonName', '-')}`")
+                st.write(f"**Organization CA:** `{issuer.get('organizationName', '-')}`")
+
+                not_before = cert.get("notBefore")
+                not_after = cert.get("notAfter")
+                st.write(f"**Valid from:** `{not_before}`")
+                st.write(f"**Valid until:** `{not_after}`")
+
+                # Expiry countdown
+                try:
+                    exp_dt = datetime.datetime.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                    days_left = (exp_dt - datetime.datetime.utcnow()).days
+                    if days_left < 0:
+                        st.error(f"🚨 **SERTIFIKAT SUDAH KEDALUWARSA** {abs(days_left)} hari lalu!")
+                    elif days_left < 30:
+                        st.warning(f"⚠️ Sertifikat akan kedaluwarsa dalam **{days_left} hari**.")
+                    else:
+                        st.success(f"✅ Sertifikat valid, sisa **{days_left} hari**.")
+                except Exception:
+                    pass
+
+                st.markdown("#### 🔗 Subject Alternative Names (SAN)")
+                sans = [x[1] for x in cert.get("subjectAltName", ())]
+                if sans:
+                    st.code("\n".join(sans), language="text")
+                else:
+                    st.caption("Tidak ada SAN.")
+
+                add_history("SSL/TLS", host, f"{version}, expires {not_after}")
+
+            except ssl.SSLError as e:
+                st.error(f"🚨 SSL Error: {e}")
+            except socket.timeout:
+                st.error("⏱️ Timeout koneksi.")
+            except socket.gaierror:
+                st.error("❌ Host tidak valid / tidak dapat di-resolve.")
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
+
+# =========================================================
+# FITUR 7: REPORT EXPORT
+# =========================================================
+with tab7:
+    st.subheader("📊 Security Report Export")
+    st.caption("Unduh riwayat scan dalam format JSON atau Markdown.")
+
+    if not st.session_state.scan_history:
+        st.info("Belum ada riwayat scan. Jalankan modul terlebih dahulu.")
+    else:
+        st.markdown(f"**Total entri:** {len(st.session_state.scan_history)}")
+
+        report_data = {
+            "generated_at": datetime.datetime.now().isoformat(),
+            "total_scans": len(st.session_state.scan_history),
+            "history": st.session_state.scan_history,
+        }
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "📥 Download JSON",
+                data=export_json(report_data, "report.json"),
+                file_name=f"cybershield_report_{int(time.time())}.json",
+                mime="application/json",
+                key="dl_json",
+            )
+        with col2:
+            st.download_button(
+                "📥 Download Markdown",
+                data=export_markdown(report_data, "CyberShield Pro Report"),
+                file_name=f"cybershield_report_{int(time.time())}.md",
+                mime="text/markdown",
+                key="dl_md",
+            )
+
+        st.markdown("#### 📋 Preview Riwayat")
+        for entry in st.session_state.scan_history:
+            with st.expander(f"[{entry['time']}] {entry['module']} → {entry['target']}"):
+                st.write(f"**Summary:** {entry['summary']}")
+
+# =========================================================
+# FOOTER
+# =========================================================
+st.markdown("---")
+st.caption(
+    "🛡️ **CyberShield Pro v2.0** — Gunakan hanya pada sistem yang Anda miliki atau berwenang. "
+    "Penyalahgunaan adalah pelanggaran hukum."
+            )
