@@ -1,6 +1,8 @@
 """
-CyberShield Enterprise v3.1 — Single File Edition
-12-Module Professional Cybersecurity Toolkit + Port Scanner Pro Max
+CyberShield Enterprise v3.2 — Single File Edition
+12-Module Professional Cybersecurity Toolkit
++ Port Scanner Pro Max
++ Directory Brute-Forcer Pro Max
 
 ⚠️ ETIKA: Gunakan hanya pada sistem milik sendiri atau dengan izin tertulis.
 """
@@ -15,6 +17,8 @@ import socket
 import sqlite3
 import hashlib
 import asyncio
+import random
+import string
 import datetime
 import threading
 import ipaddress
@@ -23,6 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 import certifi
 import requests
@@ -42,7 +47,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # KONSTANTA GLOBAL
 # =========================================================
 APP_NAME = "CyberShield Enterprise"
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.2.0"
 DB_PATH = "cybershield.db"
 DEFAULT_TIMEOUT = 8
 DEFAULT_MAX_WORKERS = 20
@@ -85,16 +90,6 @@ TECH_SIGNATURES = {
     "ASP.NET": [r"ASP\.NET", r"X-AspNet"],
 }
 
-DIRECTORY_WORDLIST = [
-    "admin", "administrator", "login", "dashboard", "wp-admin",
-    "api", "v1", "v2", "graphql", "swagger", "docs",
-    "backup", "backups", "bak", "old", "test", "dev",
-    ".git", ".env", ".htaccess", "config.php", "config.json",
-    "robots.txt", "sitemap.xml", "security.txt", ".well-known",
-    "phpinfo.php", "info.php", "server-status", "actuator",
-    "uploads", "files", "download", "static", "assets",
-]
-
 SUBDOMAIN_WORDLIST = [
     "www", "mail", "ftp", "webmail", "smtp", "pop", "ns1", "ns2",
     "dev", "test", "staging", "prod", "api", "app", "admin",
@@ -116,7 +111,7 @@ VULN_DB = {
 }
 
 # =========================================================
-# PORT SCANNER PRO MAX — PRESETS
+# PORT SCANNER PRESETS
 # =========================================================
 TOP_20 = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143,
           443, 445, 993, 995, 1433, 3306, 3389, 5432, 8080, 8443]
@@ -198,6 +193,155 @@ RISK_PORT_WEIGHTS = {
 }
 
 # =========================================================
+# DIRECTORY BRUTE-FORCER WORDLISTS
+# =========================================================
+WORDLIST_COMMON = [
+    "admin", "administrator", "login", "logout", "dashboard", "home",
+    "wp-admin", "wp-login.php", "wp-content", "wp-includes", "wp-json",
+    "api", "v1", "v2", "v3", "graphql", "rest", "rpc", "soap",
+    "user", "users", "profile", "account", "register", "signup",
+    "upload", "uploads", "download", "downloads", "files", "media",
+    "static", "assets", "css", "js", "img", "images",
+    "test", "testing", "dev", "development", "staging", "beta", "alpha",
+    "config", "settings", "setup", "install", "installer",
+    "index", "index.html", "index.php", "default", "main",
+    "search", "sitemap", "sitemap.xml", "robots.txt", "favicon.ico",
+    "docs", "documentation", "help", "support", "contact", "about",
+    "news", "blog", "article", "post", "posts", "category",
+    "shop", "store", "cart", "checkout", "order", "orders",
+    "admin.php", "login.php", "test.php", "info.php", "phpinfo.php",
+    "server-status", "server-info", "status", "health", "healthz",
+    "metrics", "actuator", "actuator/health", "actuator/env",
+]
+
+WORDLIST_SENSITIVE = [
+    ".git/config", ".git/HEAD", ".git/index", ".git/logs/HEAD",
+    ".svn/entries", ".svn/wc.db", ".hg/requires", ".bzr/README",
+    ".env", ".env.local", ".env.production", ".env.development",
+    ".htaccess", ".htpasswd", ".gitignore", ".gitattributes",
+    ".DS_Store", "Thumbs.db", "web.config", "app.config",
+    "composer.json", "composer.lock", "package.json", "package-lock.json",
+    "yarn.lock", "Gemfile", "Gemfile.lock", "requirements.txt",
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+    "Makefile", "Rakefile", "Vagrantfile",
+    "config.php", "config.json", "config.yaml", "config.yml",
+    "settings.py", "settings.php", "local_settings.py",
+    "wp-config.php", "wp-config.php.bak", "wp-config.php~",
+    "configuration.php", "conf/config.php",
+    "credentials", "credentials.txt", "passwords.txt",
+    "id_rsa", "id_dsa", "id_ed25519", ".ssh/authorized_keys",
+    "phpinfo.php", "info.php", "test.php", "adminer.php",
+    "debug.log", "error.log", "access.log", "app.log",
+    "database.sql", "dump.sql", "backup.sql", "db.sql",
+]
+
+WORDLIST_BACKUP = [
+    "backup", "backups", "bak", "backup.zip", "backup.tar", "backup.tar.gz",
+    "backup.rar", "backup.7z", "backup.sql", "backup.sql.gz",
+    "database.sql", "database.sql.gz", "db.sql", "db.backup",
+    "dump.sql", "dump.tar.gz", "site.zip", "site.tar.gz",
+    "www.zip", "www.tar.gz", "public_html.zip", "webroot.zip",
+    "backup-2020.zip", "backup-2021.zip", "backup-2022.zip",
+    "backup-2023.zip", "backup-2024.zip", "backup-2025.zip",
+    "old", "old-site", "oldsite", "previous", "archive",
+    "site.bak", "index.php.bak", "index.php.old", "index.php~",
+    "app.zip", "app.tar.gz", "src.zip", "source.zip",
+]
+
+WORDLIST_ADMIN_PANELS = [
+    "admin", "admin/", "admin/login", "admin/login.php", "admin/index.php",
+    "admin.php", "admin.html", "administrator", "administrator/",
+    "adminpanel", "adminpanel/", "admin-panel", "admin-panel/",
+    "wp-admin", "wp-admin/", "wp-login.php",
+    "phpmyadmin", "phpmyadmin/", "pma", "pma/",
+    "adminer", "adminer.php", "adminer/",
+    "cpanel", "cpanel/", "whm", "webmail",
+    "manager", "manager/", "manager/html", "host-manager",
+    "console", "console/", "dashboard", "dashboard/",
+    "user/login", "login", "login.php", "signin", "signin.php",
+]
+
+WORDLIST_API_ENDPOINTS = [
+    "api", "api/v1", "api/v2", "api/v3", "api/v4",
+    "api/users", "api/user", "api/auth", "api/login", "api/register",
+    "api/products", "api/orders", "api/customers", "api/admin",
+    "api/config", "api/health", "api/status", "api/docs",
+    "api/swagger", "api/swagger.json", "api/openapi.json",
+    "api/graphql", "graphql", "graphiql",
+    "rest", "rest/api", "rest/v1", "soap", "xmlrpc.php",
+    "rpc", "rpc/jsonrpc", "jsonrpc",
+    "swagger", "swagger/", "swagger.json", "swagger.yaml",
+    "swagger-ui", "swagger-ui.html", "swagger-ui/",
+    "openapi.json", "openapi.yaml", "docs", "docs/", "redoc",
+    "v1", "v2", "v3", "v1/api", "v2/api",
+    "actuator", "actuator/health", "actuator/env", "actuator/info",
+    "actuator/metrics", "actuator/beans", "actuator/heapdump",
+    "actuator/loggers", "actuator/threaddump", "actuator/mappings",
+]
+
+WORDLIST_PRESETS = {
+    "Common (100)": WORDLIST_COMMON,
+    "Sensitive Files": WORDLIST_SENSITIVE,
+    "Backup Files": WORDLIST_BACKUP,
+    "Admin Panels": WORDLIST_ADMIN_PANELS,
+    "API Endpoints": WORDLIST_API_ENDPOINTS,
+}
+
+BACKUP_EXTENSIONS = [".bak", ".old", ".orig", ".backup", ".copy",
+                     ".save", ".swp", ".swo", ".tmp", "~",
+                     ".zip", ".tar", ".tar.gz", ".tgz", ".rar", ".7z"]
+
+WAF_SIGNATURES = {
+    "Cloudflare": ["cloudflare", "cf-ray", "__cfduid", "cf-cache-status"],
+    "AWS WAF": ["awselb", "x-amz-cf-id", "x-amzn-requestid"],
+    "Akamai": ["akamai", "ak-bmsc", "akamai-ghost"],
+    "Sucuri": ["sucuri", "x-sucuri-id", "x-sucuri-cache"],
+    "Imperva": ["imperva", "incap_ses", "visid_incap"],
+    "F5 BIG-IP": ["bigip", "bigipserver"],
+    "ModSecurity": ["mod_security", "modsecurity"],
+    "Barracuda": ["barra", "barracuda"],
+}
+
+SENSITIVE_PATTERNS = [
+    (r"AKIA[0-9A-Z]{16}", "AWS Access Key", "CRITICAL"),
+    (r"aws_secret_access_key\s*=\s*['\"]?([A-Za-z0-9/+=]{40})", "AWS Secret Key", "CRITICAL"),
+    (r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "JWT Token", "HIGH"),
+    (r"password\s*[=:]\s*['\"]([^'\"]{3,})", "Hardcoded Password", "HIGH"),
+    (r"api[_-]?key\s*[=:]\s*['\"]([A-Za-z0-9]{20,})", "API Key", "HIGH"),
+    (r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----", "Private Key", "CRITICAL"),
+    (r"-----BEGIN OPENSSH PRIVATE KEY-----", "SSH Private Key", "CRITICAL"),
+    (r"mongodb\+srv://[^:]+:[^@]+@", "MongoDB URI with creds", "CRITICAL"),
+    (r"mysql://[^:]+:[^@]+@", "MySQL URI with creds", "CRITICAL"),
+    (r"postgres://[^:]+:[^@]+@", "PostgreSQL URI with creds", "CRITICAL"),
+    (r"redis://[^:]+:[^@]+@", "Redis URI with creds", "CRITICAL"),
+    (r"github_pat_[A-Za-z0-9_]{82}", "GitHub PAT", "CRITICAL"),
+    (r"ghp_[A-Za-z0-9]{36}", "GitHub Token", "CRITICAL"),
+    (r"sk-[A-Za-z0-9]{48}", "OpenAI API Key", "HIGH"),
+    (r"AIza[0-9A-Za-z_-]{35}", "Google API Key", "HIGH"),
+    (r"xox[baprs]-[A-Za-z0-9-]+", "Slack Token", "HIGH"),
+]
+
+SENSITIVE_PATH_PATTERNS = [
+    (r"\.git/", "Git Repository Exposed", "CRITICAL"),
+    (r"\.env", "Environment File Exposed", "CRITICAL"),
+    (r"\.svn/", "SVN Repository Exposed", "HIGH"),
+    (r"\.DS_Store", "macOS Metadata Exposed", "LOW"),
+    (r"\.htpasswd", "Password File Exposed", "CRITICAL"),
+    (r"\.htaccess", "Apache Config Exposed", "MEDIUM"),
+    (r"phpinfo", "phpinfo() Exposed", "HIGH"),
+    (r"server-status", "Apache server-status Exposed", "MEDIUM"),
+    (r"actuator/env", "Spring Actuator Env Exposed", "CRITICAL"),
+    (r"actuator/heapdump", "Spring Actuator Heapdump Exposed", "CRITICAL"),
+    (r"wp-config", "WordPress Config Exposed", "CRITICAL"),
+    (r"backup|\.bak|\.old|\.orig", "Backup File Exposed", "HIGH"),
+    (r"\.sql(\b|$|\.gz)", "SQL Dump Exposed", "CRITICAL"),
+    (r"\.log(\b|$)", "Log File Exposed", "MEDIUM"),
+    (r"adminer", "Adminer Exposed", "HIGH"),
+    (r"swagger|openapi", "API Documentation Exposed", "MEDIUM"),
+]
+
+
+# =========================================================
 # UTILITAS
 # =========================================================
 def clean_target(target: str) -> str:
@@ -209,10 +353,6 @@ def normalize_url(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         return "https://" + url
     return url
-
-
-def now_str() -> str:
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def to_json(data) -> str:
@@ -231,13 +371,6 @@ def levenshtein(a: str, b: str) -> int:
             cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
         prev = cur
     return prev[-1]
-
-
-def extract_host_port(url: str):
-    p = urllib.parse.urlparse(normalize_url(url))
-    host = p.hostname or ""
-    port = p.port or (443 if p.scheme == "https" else 80)
-    return host, port, p.scheme
 
 
 # =========================================================
@@ -354,7 +487,7 @@ def get_audit_log(limit: int = 100):
 # =========================================================
 class HTTPEngine:
     def __init__(self, timeout=DEFAULT_TIMEOUT, rate_limit_ms=DEFAULT_RATE_LIMIT_MS,
-                 user_agent="Mozilla/5.0 (CyberShield Enterprise v3.1)"):
+                 user_agent="Mozilla/5.0 (CyberShield Enterprise v3.2)"):
         self.timeout = timeout
         self.bucket = TokenBucket(
             rate_per_sec=1000.0 / max(rate_limit_ms, 1), capacity=20
@@ -394,7 +527,7 @@ class HTTPEngine:
 
 
 # =========================================================
-# MODUL: PORT SCANNER PRO MAX
+# PORT SCANNER PRO MAX
 # =========================================================
 @dataclass
 class PortResult:
@@ -412,7 +545,7 @@ class PortResult:
 
 
 @dataclass
-class ScanReport:
+class PortScanReport:
     target: str
     ip: str
     scan_type: str = "TCP"
@@ -639,7 +772,6 @@ def os_fingerprint(ip: str) -> dict:
     return result
 
 
-# ---- NSE-lite checks ----
 def _check_redis_noauth(ip, port=6379, timeout=2.0):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -711,7 +843,7 @@ def run_nse_checks(ip: str, open_ports: list) -> list:
     findings = []
     port_set = set(open_ports)
     if 6379 in port_set:
-        f = _check_redis_noauth(ip); 
+        f = _check_redis_noauth(ip)
         if f: findings.append(f)
     if 21 in port_set:
         f = _check_ftp_anonymous(ip)
@@ -727,7 +859,7 @@ def run_nse_checks(ip: str, open_ports: list) -> list:
     return findings
 
 
-def compute_risk(open_ports: list, vulns: list) -> int:
+def compute_port_risk(open_ports: list, vulns: list) -> int:
     score = 0
     for p in open_ports:
         score += RISK_PORT_WEIGHTS.get(p.port, 0)
@@ -771,12 +903,12 @@ def resolve_target(target: str):
 def run_full_scan(target: str, ports: list, scan_type: str = "TCP",
                   timeout: float = 1.0, retries: int = 2, max_workers: int = 100,
                   grab_banner: bool = True, run_vuln_checks: bool = True,
-                  os_detect: bool = True, progress_cb=None, log_cb=None) -> ScanReport:
+                  os_detect: bool = True, progress_cb=None, log_cb=None) -> PortScanReport:
     ip = resolve_target(target)
     if not ip:
-        return ScanReport(target=target, ip="", errors=[f"Cannot resolve {target}"])
+        return PortScanReport(target=target, ip="", errors=[f"Cannot resolve {target}"])
 
-    started = datetime.now_iso = datetime.datetime.now().isoformat()
+    started = datetime.datetime.now().isoformat()
     t0 = time.perf_counter()
 
     if log_cb:
@@ -812,8 +944,8 @@ def run_full_scan(target: str, ports: list, scan_type: str = "TCP",
             if log_cb:
                 log_cb(f"[!] {v['severity']}: {v['type']}")
 
-    risk = compute_risk(open_ports, vulns)
-    return ScanReport(
+    risk = compute_port_risk(open_ports, vulns)
+    return PortScanReport(
         target=target, ip=ip, scan_type=scan_type,
         started=started, finished=datetime.datetime.now().isoformat(),
         duration_sec=round(elapsed, 2), total_ports=len(ports),
@@ -821,11 +953,11 @@ def run_full_scan(target: str, ports: list, scan_type: str = "TCP",
     )
 
 
-def report_to_json(report: ScanReport) -> str:
+def port_report_json(report: PortScanReport) -> str:
     return json.dumps(report.to_dict(), indent=2, default=str)
 
 
-def report_to_markdown(report: ScanReport) -> str:
+def port_report_md(report: PortScanReport) -> str:
     lines = [
         f"# Port Scan Report — {report.target}",
         f"**IP:** {report.ip}", f"**Type:** {report.scan_type}",
@@ -854,7 +986,7 @@ def report_to_markdown(report: ScanReport) -> str:
     return "\n".join(lines)
 
 
-def report_to_csv(report: ScanReport) -> str:
+def port_report_csv(report: PortScanReport) -> str:
     lines = ["port,state,service,version,banner,cve_hint"]
     for p in report.open_ports:
         banner = p.banner.replace(",", ";").replace("\n", " ")
@@ -863,7 +995,407 @@ def report_to_csv(report: ScanReport) -> str:
 
 
 # =========================================================
-# MODUL: WEB AUDIT
+# DIRECTORY BRUTE-FORCER PRO MAX
+# =========================================================
+@dataclass
+class PathHit:
+    path: str
+    url: str
+    status: int
+    size: int
+    content_type: str = ""
+    redirect_to: str = ""
+    is_directory_listing: bool = False
+    severity: str = "LOW"
+    category: str = "other"
+    sensitive_findings: list = field(default_factory=list)
+    latency_ms: float = 0.0
+
+    def to_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class BruteReport:
+    base_url: str
+    started: str = ""
+    finished: str = ""
+    duration_sec: float = 0.0
+    total_tested: int = 0
+    total_hits: int = 0
+    hits: list = field(default_factory=list)
+    waf_detected: str = ""
+    baseline_404_size: int = 0
+    risk_score: int = 0
+    errors: list = field(default_factory=list)
+    robots_paths: list = field(default_factory=list)
+    sitemap_paths: list = field(default_factory=list)
+
+    def to_dict(self):
+        return {
+            "base_url": self.base_url, "started": self.started,
+            "finished": self.finished, "duration_sec": self.duration_sec,
+            "total_tested": self.total_tested, "total_hits": self.total_hits,
+            "hits": [h.to_dict() for h in self.hits],
+            "waf_detected": self.waf_detected,
+            "baseline_404_size": self.baseline_404_size,
+            "risk_score": self.risk_score, "errors": self.errors,
+            "robots_paths": self.robots_paths,
+            "sitemap_paths": self.sitemap_paths,
+        }
+
+
+def _rand_path(length=12):
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+
+
+def _detect_waf(headers: dict, body: str) -> str:
+    text = (str(headers) + body[:5000]).lower()
+    for waf, sigs in WAF_SIGNATURES.items():
+        if any(s.lower() in text for s in sigs):
+            return waf
+    return ""
+
+
+def _detect_dir_listing(body: str) -> bool:
+    patterns = ["Index of /", "Directory listing for /", "[To Parent Directory]"]
+    return any(p in body[:5000] for p in patterns)
+
+
+def _scan_sensitive(body: str) -> list:
+    findings = []
+    for pattern, name, sev in SENSITIVE_PATTERNS:
+        m = re.search(pattern, body, re.I)
+        if m:
+            findings.append({"pattern": name, "severity": sev,
+                             "sample": m.group(0)[:80]})
+    return findings
+
+
+def _categorize_path(path: str, status: int, body: str) -> tuple:
+    pl = path.lower()
+    for pattern, _, severity in SENSITIVE_PATH_PATTERNS:
+        if re.search(pattern, pl, re.I):
+            return ("sensitive", severity)
+    if re.search(r"admin|login|dashboard|console|phpmyadmin|adminer", pl, re.I):
+        return ("admin", "HIGH" if status == 200 else "MEDIUM")
+    if re.search(r"api|graphql|swagger|openapi|rest", pl, re.I):
+        return ("api", "MEDIUM")
+    if re.search(r"backup|\.bak|\.old|\.sql|\.zip|\.tar", pl, re.I):
+        return ("backup", "HIGH")
+    if re.search(r"upload|file|media|download", pl, re.I):
+        return ("files", "MEDIUM")
+    if _detect_dir_listing(body):
+        return ("listing", "MEDIUM")
+    if status == 200:
+        return ("exposed", "LOW")
+    if status in (301, 302):
+        return ("redirect", "INFO")
+    if status == 403:
+        return ("forbidden", "MEDIUM")
+    return ("other", "INFO")
+
+
+def _calibrate_baseline(engine, base_url, ignore_ssl=False) -> int:
+    try:
+        rand = _rand_path(16)
+        r = engine.get(f"{base_url.rstrip('/')}/{rand}",
+                       verify=not ignore_ssl, allow_redirects=False, retries=0)
+        return len(r.content)
+    except Exception:
+        return 0
+
+
+def _parse_robots(engine, base_url, ignore_ssl=False) -> list:
+    paths = []
+    try:
+        r = engine.get(f"{base_url.rstrip('/')}/robots.txt",
+                       verify=not ignore_ssl, retries=0)
+        if r.status_code == 200:
+            for line in r.text.splitlines():
+                line = line.strip()
+                if line.lower().startswith("disallow:"):
+                    p = line.split(":", 1)[1].strip()
+                    if p and p != "/":
+                        paths.append(p.lstrip("/"))
+    except Exception:
+        pass
+    return paths
+
+
+def _parse_sitemap(engine, base_url, ignore_ssl=False) -> list:
+    paths = []
+    try:
+        r = engine.get(f"{base_url.rstrip('/')}/sitemap.xml",
+                       verify=not ignore_ssl, retries=0)
+        if r.status_code == 200 and "<urlset" in r.text.lower():
+            urls = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", r.text)
+            base_parsed = urlparse(base_url)
+            for u in urls[:200]:
+                p = urlparse(u)
+                if p.netloc == base_parsed.netloc or not p.netloc:
+                    paths.append(p.path.lstrip("/") or "/")
+    except Exception:
+        pass
+    return paths
+
+
+def _check_path_full(engine, base_url, path, ignore_ssl,
+                     baseline_size, follow_redirects=False):
+    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+    start = time.perf_counter()
+    try:
+        r = engine.get(url, verify=not ignore_ssl,
+                       allow_redirects=follow_redirects, retries=1)
+    except Exception:
+        return None
+
+    latency = (time.perf_counter() - start) * 1000
+    status = r.status_code
+    body = r.text or ""
+    size = len(r.content)
+    ctype = r.headers.get("Content-Type", "")
+
+    if status in (405, 501, 502, 503, 504):
+        return None
+    if baseline_size > 0 and abs(size - baseline_size) < 50 and status == 200:
+        return None
+    if status == 404:
+        return None
+    if status == 200 and size == 0 and not ctype:
+        return None
+
+    body_lower = body[:10000]
+    category, severity = _categorize_path(path, status, body_lower)
+
+    sens = _scan_sensitive(body[:50000]) if size < 500_000 else []
+    if sens:
+        max_sev = max(
+            (s["severity"] for s in sens),
+            key=lambda x: {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}.get(x, 0),
+        )
+        cur_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}.get(severity, 0)
+        new_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}.get(max_sev, 0)
+        if new_rank > cur_rank:
+            severity = max_sev
+
+    return PathHit(
+        path=path, url=url, status=status, size=size, content_type=ctype,
+        redirect_to=r.headers.get("Location", "") if status in (301, 302, 303, 307, 308) else "",
+        is_directory_listing=_detect_dir_listing(body_lower),
+        severity=severity, category=category,
+        sensitive_findings=sens, latency_ms=round(latency, 2),
+    )
+
+
+def _compute_dir_risk(hits: list) -> int:
+    score = 0
+    weights = {"CRITICAL": 20, "HIGH": 10, "MEDIUM": 5, "LOW": 1, "INFO": 0}
+    for h in hits:
+        score += weights.get(h.severity, 0)
+    return min(100, score)
+
+
+def _is_likely_directory(hit: PathHit) -> bool:
+    if hit.path.endswith("/"):
+        return True
+    if hit.status in (301, 302) and hit.redirect_to.endswith("/"):
+        return True
+    if hit.is_directory_listing:
+        return True
+    return False
+
+
+def brute_directory_pro(engine, base_url: str, wordlist: list,
+                        ignore_ssl: bool = False, max_workers: int = 20,
+                        follow_redirects: bool = False, recursive: bool = True,
+                        max_recursion_depth: int = 2, use_robots: bool = True,
+                        use_sitemap: bool = True, extension_fuzz: bool = True,
+                        progress_cb=None, log_cb=None) -> BruteReport:
+    base_url = base_url.rstrip("/")
+    report = BruteReport(base_url=base_url, started=datetime.datetime.now().isoformat())
+    t0 = time.perf_counter()
+
+    if log_cb:
+        log_cb(f"[+] Base: {base_url}")
+        log_cb(f"[+] Wordlist size: {len(wordlist)}")
+
+    baseline = _calibrate_baseline(engine, base_url, ignore_ssl)
+    report.baseline_404_size = baseline
+    if log_cb:
+        log_cb(f"[+] Baseline 404 size: {baseline} bytes")
+
+    extra_paths = []
+    if use_robots:
+        robots_paths = _parse_robots(engine, base_url, ignore_ssl)
+        report.robots_paths = robots_paths
+        extra_paths.extend(robots_paths)
+        if log_cb:
+            log_cb(f"[+] robots.txt: {len(robots_paths)} paths extracted")
+
+    if use_sitemap:
+        sitemap_paths = _parse_sitemap(engine, base_url, ignore_ssl)
+        report.sitemap_paths = sitemap_paths
+        extra_paths.extend(sitemap_paths)
+        if log_cb:
+            log_cb(f"[+] sitemap.xml: {len(sitemap_paths)} paths extracted")
+
+    all_paths = list(dict.fromkeys(wordlist + extra_paths))
+
+    if extension_fuzz:
+        ext_list = []
+        for p in all_paths:
+            if "." not in p.split("/")[-1]:
+                for ext in [".php", ".html", ".bak", ".zip", ".txt"]:
+                    ext_list.append(p + ext)
+        all_paths.extend(ext_list)
+        if log_cb:
+            log_cb(f"[+] Extension fuzz: {len(ext_list)} extra candidates")
+
+    try:
+        r = engine.get(base_url, verify=not ignore_ssl, retries=0)
+        report.waf_detected = _detect_waf(dict(r.headers), r.text or "")
+        if report.waf_detected and log_cb:
+            log_cb(f"[!] WAF detected: {report.waf_detected}")
+    except Exception:
+        pass
+
+    scanned = 0
+    hits = []
+    total = len(all_paths)
+
+    if log_cb:
+        log_cb(f"[+] Level 0 scanning {total} paths...")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {
+            ex.submit(_check_path_full, engine, base_url, p, ignore_ssl,
+                      baseline, follow_redirects): p
+            for p in all_paths
+        }
+        for fut in as_completed(futures):
+            scanned += 1
+            try:
+                hit = fut.result()
+                if hit:
+                    hits.append(hit)
+                    if log_cb:
+                        log_cb(f"[+] {hit.status} {hit.path} ({hit.size}B) [{hit.severity}]")
+            except Exception:
+                pass
+            if progress_cb:
+                progress_cb(scanned, total, "level0")
+
+    if recursive and max_recursion_depth > 0:
+        dirs_found = [h for h in hits if _is_likely_directory(h)]
+        if dirs_found and log_cb:
+            log_cb(f"[+] Recursive: {len(dirs_found)} directories detected")
+
+        for depth in range(1, max_recursion_depth + 1):
+            dirs_to_scan = dirs_found if depth == 1 else [
+                h for h in hits if _is_likely_directory(h)
+                and h.path.count("/") == depth
+            ]
+            for d in dirs_to_scan[:20]:
+                sub_base = f"{base_url}/{d.path.rstrip('/')}"
+                if log_cb:
+                    log_cb(f"[+] Recurse depth {depth}: {sub_base}")
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = {
+                        ex.submit(_check_path_full, engine, sub_base, p, ignore_ssl,
+                                  baseline, follow_redirects): p
+                        for p in wordlist[:60]
+                    }
+                    for fut in as_completed(futures):
+                        try:
+                            hit = fut.result()
+                            if hit:
+                                hit.path = f"{d.path.rstrip('/')}/{hit.path}"
+                                hits.append(hit)
+                                if log_cb:
+                                    log_cb(f"[+] {hit.status} {hit.path} [{hit.severity}]")
+                        except Exception:
+                            pass
+
+    report.finished = datetime.datetime.now().isoformat()
+    report.duration_sec = round(time.perf_counter() - t0, 2)
+    report.total_tested = scanned
+    report.hits = hits
+    report.total_hits = len(hits)
+    report.risk_score = _compute_dir_risk(hits)
+
+    if log_cb:
+        log_cb(f"[✓] Done: {report.total_hits} hits in {report.duration_sec}s")
+        log_cb(f"[✓] Risk score: {report.risk_score}/100")
+
+    return report
+
+
+def dir_report_json(report: BruteReport) -> str:
+    return json.dumps(report.to_dict(), indent=2, default=str)
+
+
+def dir_report_csv(report: BruteReport) -> str:
+    lines = ["path,url,status,size,severity,category,redirect,sensitive"]
+    for h in report.hits:
+        sens_names = ";".join(s["pattern"] for s in h.sensitive_findings)
+        redirect = h.redirect_to.replace(",", ";")
+        lines.append(
+            f"{h.path},{h.url},{h.status},{h.size},{h.severity},"
+            f"{h.category},{redirect},{sens_names}"
+        )
+    return "\n".join(lines)
+
+
+def dir_report_md(report: BruteReport) -> str:
+    lines = [
+        "# Directory Brute-Force Report",
+        f"**Base URL:** {report.base_url}",
+        f"**Started:** {report.started}",
+        f"**Duration:** {report.duration_sec}s",
+        f"**Tested:** {report.total_tested}",
+        f"**Hits:** {report.total_hits}",
+        f"**Risk Score:** {report.risk_score}/100",
+    ]
+    if report.waf_detected:
+        lines.append(f"**WAF:** {report.waf_detected}")
+    lines.append("")
+
+    sev_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+    for h in report.hits:
+        sev_count[h.severity] = sev_count.get(h.severity, 0) + 1
+    lines.append("## Summary by Severity")
+    for sev, cnt in sev_count.items():
+        if cnt:
+            lines.append(f"- **{sev}**: {cnt}")
+    lines.append("")
+
+    by_cat = {}
+    for h in report.hits:
+        by_cat.setdefault(h.category, []).append(h)
+
+    for cat, items in sorted(by_cat.items()):
+        lines.append(f"## Category: {cat.upper()}")
+        lines.append("| Path | Status | Size | Severity |")
+        lines.append("|------|--------|------|----------|")
+        for h in sorted(items, key=lambda x: x.path):
+            lines.append(f"| {h.path} | {h.status} | {h.size} | {h.severity} |")
+        lines.append("")
+
+    sens_findings = [h for h in report.hits if h.sensitive_findings]
+    if sens_findings:
+        lines.append("## Sensitive Content Findings")
+        for h in sens_findings:
+            lines.append(f"### {h.path}")
+            for s in h.sensitive_findings:
+                lines.append(f"- **[{s['severity']}]** {s['pattern']}: `{s['sample'][:60]}...`")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+# =========================================================
+# WEB AUDIT
 # =========================================================
 def audit_web(engine, url, ignore_ssl=False):
     resp, ssl_ok, ssl_err = engine.safe_get(url, ignore_ssl=ignore_ssl)
@@ -890,7 +1422,7 @@ def audit_web(engine, url, ignore_ssl=False):
 
 
 # =========================================================
-# MODUL: SUBDOMAIN ENUM
+# SUBDOMAIN ENUM
 # =========================================================
 def _resolve_sub(domain, sub):
     host = f"{sub}.{domain}"
@@ -940,35 +1472,7 @@ def enumerate_subdomains(domain, use_crtsh=True, max_workers=30):
 
 
 # =========================================================
-# MODUL: DIRECTORY BRUTE
-# =========================================================
-def _check_path(engine, base_url, path, ignore_ssl):
-    url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
-    try:
-        r = engine.get(url, verify=not ignore_ssl, allow_redirects=False, retries=0)
-        return {"path": path, "url": url, "status": r.status_code,
-                "size": len(r.content), "redirect": r.headers.get("Location")}
-    except Exception:
-        return {"path": path, "url": url, "status": None}
-
-
-def brute_directory(engine, base_url, ignore_ssl=False, max_workers=15):
-    results = {"base_url": base_url, "hits": [], "scanned": 0}
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = {ex.submit(_check_path, engine, base_url, p, ignore_ssl): p
-                   for p in DIRECTORY_WORDLIST}
-        for fut in as_completed(futures):
-            r = fut.result()
-            results["scanned"] += 1
-            if r["status"] and r["status"] < 400:
-                results["hits"].append(r)
-    results["hits"].sort(key=lambda x: (x["status"], x["path"]))
-    results["total_hits"] = len(results["hits"])
-    return results
-
-
-# =========================================================
-# MODUL: TECH FINGERPRINT
+# TECH FINGERPRINT
 # =========================================================
 def fingerprint_technology(engine, url, ignore_ssl=False):
     results = {"url": url, "detected": [], "server_header": None,
@@ -997,7 +1501,7 @@ def fingerprint_technology(engine, url, ignore_ssl=False):
 
 
 # =========================================================
-# MODUL: VULN CHECKER
+# VULN CHECKER
 # =========================================================
 def check_vulnerabilities(engine, url, ignore_ssl=False):
     findings = []
@@ -1046,7 +1550,7 @@ def check_vulnerabilities(engine, url, ignore_ssl=False):
 
 
 # =========================================================
-# MODUL: EMAIL OSINT
+# EMAIL OSINT
 # =========================================================
 def _dns_query(domain, record_type):
     try:
@@ -1108,7 +1612,7 @@ DASHBOARD_MODULES = [
     ("💻", "Web Auditor", "10+ headers, cookie flags", "HTTP Audit"),
     ("🔐", "SSL/TLS Inspector", "Cipher, chain, expiry", "TLS Deep"),
     ("🕷️", "Subdomain Enum", "Wordlist + crt.sh", "OSINT"),
-    ("📂", "Directory Brute", "Hidden paths, backups", "Web Recon"),
+    ("📂", "Directory Brute", "Recursive, WAF, sensitive", "Pro Max"),
     ("🧬", "Tech Fingerprint", "CMS, framework, JS", "Fingerprint"),
     ("🛡️", "Vuln Checker", "CVE, exposed files", "Vuln Scan"),
     ("📧", "Email OSINT", "SPF, DMARC, DKIM", "Email Audit"),
@@ -1137,7 +1641,7 @@ def render_dashboard(dark: bool):
     </style></head><body>
         <div class="header">
             <h1>🛡️ {APP_NAME} v{APP_VERSION}</h1>
-            <p>12-Module Professional Cybersecurity Toolkit + Port Scanner Pro Max</p>
+            <p>12-Module Toolkit + Port Scanner Pro Max + Directory Brute Pro Max</p>
         </div>
         <div class="grid">{cards}</div>
     </body></html>"""
@@ -1159,7 +1663,7 @@ with st.sidebar.expander("⚙️ Konfigurasi Global", expanded=False):
     timeout_val = st.slider("Timeout (detik)", 2, 30, DEFAULT_TIMEOUT)
     max_workers_val = st.slider("Max concurrency", 1, 50, DEFAULT_MAX_WORKERS)
     rate_limit_val = st.slider("Rate limit (ms)", 0, 500, DEFAULT_RATE_LIMIT_MS)
-    ua_val = st.text_input("User-Agent", value="Mozilla/5.0 (CyberShield Enterprise v3.1)")
+    ua_val = st.text_input("User-Agent", value="Mozilla/5.0 (CyberShield Enterprise v3.2)")
 
 with st.sidebar.expander("🎨 Tema", expanded=False):
     dark_mode = st.toggle("Dark Mode", value=True)
@@ -1202,7 +1706,7 @@ st.markdown("### 🛠️ 12 Modul Eksekusi")
     tab_email, tab_report,
 ) = st.tabs([
     "🔒 Password", "🌐 Phishing", "🔍 DNS/IP", "📡 Port PRO",
-    "💻 Web Audit", "🔐 SSL/TLS", "🕷️ Subdomain", "📂 Directory",
+    "💻 Web Audit", "🔐 SSL/TLS", "🕷️ Subdomain", "📂 Dir Brute",
     "🧬 Tech", "🛡️ Vuln", "📧 Email", "📊 Report",
 ])
 
@@ -1360,7 +1864,6 @@ with tab_port:
         key="ps_mode",
     )
 
-    # ---- SINGLE TARGET ----
     if scan_mode == "Single Target":
         tgt = st.text_input("Host / IP target:",
                             placeholder="scanme.nmap.org", key="ps_target")
@@ -1392,7 +1895,7 @@ with tab_port:
 
         col_a1, col_a2, col_a3 = st.columns(3)
         with col_a1: grab_banner_flag = st.checkbox("Grab banner", value=True, key="ps_grab")
-        with col_a2: vuln_flag = st.checkbox("Run vuln checks (NSE-lite)", value=True, key="ps_vuln")
+        with col_a2: vuln_flag = st.checkbox("Run vuln checks", value=True, key="ps_vuln")
         with col_a3: os_flag = st.checkbox("OS fingerprint", value=True, key="ps_os")
 
         if st.button("🚀 Mulai Scan", key="ps_btn_scan"):
@@ -1458,7 +1961,7 @@ with tab_port:
                         st.info("🔒 Tidak ada port terbuka terdeteksi.")
 
                     if report.vulns:
-                        st.markdown("#### 🛡️ Vulnerability Findings (NSE-lite)")
+                        st.markdown("#### 🛡️ Vulnerability Findings")
                         for v in report.vulns:
                             sev = v["severity"]
                             if sev == "CRITICAL":
@@ -1471,15 +1974,15 @@ with tab_port:
                     st.markdown("#### 📥 Export Hasil")
                     e1, e2, e3 = st.columns(3)
                     with e1:
-                        st.download_button("📄 JSON", data=report_to_json(report),
+                        st.download_button("📄 JSON", data=port_report_json(report),
                                            file_name=f"portscan_{report.ip}_{int(time.time())}.json",
                                            mime="application/json", key="ps_dl_json")
                     with e2:
-                        st.download_button("📝 Markdown", data=report_to_markdown(report),
+                        st.download_button("📝 Markdown", data=port_report_md(report),
                                            file_name=f"portscan_{report.ip}_{int(time.time())}.md",
                                            mime="text/markdown", key="ps_dl_md")
                     with e3:
-                        st.download_button("📊 CSV", data=report_to_csv(report),
+                        st.download_button("📊 CSV", data=port_report_csv(report),
                                            file_name=f"portscan_{report.ip}_{int(time.time())}.csv",
                                            mime="text/csv", key="ps_dl_csv")
 
@@ -1487,7 +1990,6 @@ with tab_port:
                 except Exception as e:
                     st.error(f"❌ Error: {e}")
 
-    # ---- BATCH ----
     elif scan_mode == "Batch / Multi-target":
         batch_input = st.text_area(
             "Daftar target (1 per baris, support CIDR & range):",
@@ -1536,12 +2038,11 @@ with tab_port:
                                  "Duration": f"{rep.duration_sec}s"})
                 st.dataframe(rows, use_container_width=True)
 
-                combined_md = "\n\n---\n\n".join(report_to_markdown(r) for r in all_reports)
+                combined_md = "\n\n---\n\n".join(port_report_md(r) for r in all_reports)
                 st.download_button("📝 Download Batch Markdown", data=combined_md,
                                    file_name=f"batch_scan_{int(time.time())}.md",
                                    mime="text/markdown", key="ps_batch_dl")
 
-    # ---- PING SWEEP ----
     else:
         st.markdown("**Ping Sweep / Host Discovery** — cari host hidup di subnet.")
         subnet = st.text_input("Subnet / CIDR:",
@@ -1678,20 +2179,174 @@ with tab_sub:
             save_scan("Subdomain", dom, res)
 
 # =========================================================
-# TAB 8: DIRECTORY BRUTE
+# TAB 8: DIRECTORY BRUTE-FORCER PRO MAX
 # =========================================================
 with tab_dir:
-    st.subheader("📂 Directory Brute-Forcer")
-    u = st.text_input("Base URL:", placeholder="https://example.com", key="dir_url")
-    ign2 = st.checkbox("Ignore SSL", key="dir_ign")
-    if st.button("📂 Brute", key="btn_dir"):
-        if u:
-            with st.spinner("Brute-forcing..."):
-                res = brute_directory(engine, normalize_url(u), ignore_ssl=ign2)
-            st.success(f"✅ {res['total_hits']} hits dari {res['scanned']} path")
-            for h in res["hits"]:
-                st.markdown(f"🟢 `{h['path']}` → HTTP {h['status']} ({h['size']} bytes)")
-            save_scan("Directory", u, res)
+    st.subheader("📂 Directory Brute-Forcer Pro Max")
+    st.caption("Multi-wordlist, recursive, soft-404, WAF detect, backup finder, robots/sitemap parser, content analysis.")
+
+    db_url = st.text_input("Base URL:", placeholder="https://example.com", key="dir_url_pro")
+    db_ign = st.checkbox("Ignore SSL", key="dir_ign_pro")
+
+    wl_mode = st.radio("Wordlist:",
+                        ["Preset", "Gabungan (semua preset)", "Custom upload"],
+                        horizontal=True, key="dir_wl_mode")
+
+    wordlist = []
+    if wl_mode == "Preset":
+        preset_choice = st.multiselect("Pilih preset:",
+                                        list(WORDLIST_PRESETS.keys()),
+                                        default=["Common (100)"], key="dir_presets")
+        for p in preset_choice:
+            wordlist.extend(WORDLIST_PRESETS[p])
+        wordlist = list(dict.fromkeys(wordlist))
+    elif wl_mode == "Gabungan (semua preset)":
+        wordlist = (WORDLIST_COMMON + WORDLIST_SENSITIVE +
+                    WORDLIST_BACKUP + WORDLIST_ADMIN_PANELS + WORDLIST_API_ENDPOINTS)
+        wordlist = list(dict.fromkeys(wordlist))
+        st.info(f"Total kombinasi: **{len(wordlist)}** kata")
+    else:
+        uploaded = st.file_uploader("Upload wordlist (.txt, 1 path per baris):",
+                                     type=["txt"], key="dir_upload")
+        if uploaded:
+            content = uploaded.read().decode("utf-8", errors="ignore")
+            wordlist = [line.strip() for line in content.splitlines()
+                        if line.strip() and not line.startswith("#")]
+            st.success(f"Loaded **{len(wordlist)}** entries dari file.")
+        else:
+            st.caption("Belum ada file diupload. Default: Common (100).")
+            wordlist = WORDLIST_COMMON
+
+    with st.expander("⚙️ Opsi Lanjutan", expanded=False):
+        col_o1, col_o2 = st.columns(2)
+        with col_o1:
+            recursive_flag = st.checkbox("Recursive discovery", value=True, key="dir_recursive")
+            follow_redirects = st.checkbox("Follow redirects (301/302)", value=False, key="dir_follow")
+            robots_flag = st.checkbox("Parse robots.txt", value=True, key="dir_robots")
+        with col_o2:
+            sitemap_flag = st.checkbox("Parse sitemap.xml", value=True, key="dir_sitemap")
+            ext_flag = st.checkbox("Extension fuzzing (.php/.bak/.zip)", value=True, key="dir_ext")
+            depth = st.slider("Max recursion depth", 1, 3, 2, key="dir_depth")
+
+    if st.button("📂 Mulai Brute-Force", key="btn_dir_pro"):
+        if not db_url:
+            st.error("❌ Masukkan Base URL.")
+        elif not wordlist:
+            st.error("❌ Wordlist kosong.")
+        else:
+            log_box = st.empty()
+            progress_bar = st.progress(0)
+            status = st.empty()
+            logs = []
+
+            def _log2(msg):
+                logs.append(f"`{msg}`")
+                log_box.markdown("\n\n".join(logs[-15:]))
+
+            def _progress2(done, total, stage):
+                pct = done / max(total, 1)
+                progress_bar.progress(min(pct, 1.0))
+                status.caption(f"[{stage}] {done}/{total} ({pct*100:.1f}%)")
+
+            try:
+                with st.spinner("Brute-forcing..."):
+                    report = brute_directory_pro(
+                        engine, normalize_url(db_url), wordlist,
+                        ignore_ssl=db_ign,
+                        max_workers=max_workers_val,
+                        follow_redirects=follow_redirects,
+                        recursive=recursive_flag,
+                        max_recursion_depth=depth,
+                        use_robots=robots_flag,
+                        use_sitemap=sitemap_flag,
+                        extension_fuzz=ext_flag,
+                        progress_cb=_progress2,
+                        log_cb=_log2,
+                    )
+                progress_bar.progress(1.0)
+                status.empty()
+
+                st.success(f"✅ Selesai dalam {report.duration_sec}s — "
+                           f"{report.total_hits} hits dari {report.total_tested} paths")
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Hits", report.total_hits)
+                m2.metric("Tested", report.total_tested)
+                m3.metric("Risk Score", f"{report.risk_score}/100")
+                m4.metric("Duration", f"{report.duration_sec}s")
+
+                if report.waf_detected:
+                    st.warning(f"🛡️ WAF terdeteksi: **{report.waf_detected}**")
+
+                if report.robots_paths:
+                    with st.expander(f"🤖 robots.txt paths ({len(report.robots_paths)})"):
+                        st.code("\n".join(report.robots_paths), language="text")
+
+                if report.sitemap_paths:
+                    with st.expander(f"🗺️ sitemap.xml paths ({len(report.sitemap_paths)})"):
+                        st.code("\n".join(report.sitemap_paths[:50]), language="text")
+
+                if report.hits:
+                    sev_cols = st.columns(5)
+                    sev_labels = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+                    sev_counts = {s: 0 for s in sev_labels}
+                    for h in report.hits:
+                        sev_counts[h.severity] = sev_counts.get(h.severity, 0) + 1
+                    for i, sev in enumerate(sev_labels):
+                        sev_cols[i].metric(sev, sev_counts.get(sev, 0))
+
+                if report.hits:
+                    st.markdown("#### 📊 Hasil per Kategori")
+                    by_cat = {}
+                    for h in report.hits:
+                        by_cat.setdefault(h.category, []).append(h)
+
+                    for cat in sorted(by_cat.keys()):
+                        items = by_cat[cat]
+                        with st.expander(f"📁 {cat.upper()} ({len(items)} item)",
+                                          expanded=(cat in ("sensitive", "admin"))):
+                            rows = []
+                            for h in sorted(items, key=lambda x: x.path):
+                                rows.append({
+                                    "Path": h.path, "Status": h.status, "Size": h.size,
+                                    "Severity": h.severity,
+                                    "Redirect": h.redirect_to[:40] if h.redirect_to else "",
+                                    "Dir Listing": "✓" if h.is_directory_listing else "",
+                                })
+                            st.dataframe(rows, use_container_width=True)
+                            for h in items:
+                                if h.sensitive_findings:
+                                    st.markdown(f"**🔍 Sensitive content di `{h.path}`:**")
+                                    for s in h.sensitive_findings:
+                                        color = (
+                                            "error" if s["severity"] == "CRITICAL"
+                                            else "warning" if s["severity"] == "HIGH"
+                                            else "info"
+                                        )
+                                        getattr(st, color)(
+                                            f"**[{s['severity']}]** {s['pattern']}: "
+                                            f"`{s['sample'][:80]}...`"
+                                        )
+
+                st.markdown("#### 📥 Export Hasil")
+                e1, e2, e3 = st.columns(3)
+                with e1:
+                    st.download_button("📄 JSON", data=dir_report_json(report),
+                                       file_name=f"dirbrute_{int(time.time())}.json",
+                                       mime="application/json", key="dir_dl_json")
+                with e2:
+                    st.download_button("📊 CSV", data=dir_report_csv(report),
+                                       file_name=f"dirbrute_{int(time.time())}.csv",
+                                       mime="text/csv", key="dir_dl_csv")
+                with e3:
+                    st.download_button("📝 Markdown", data=dir_report_md(report),
+                                       file_name=f"dirbrute_{int(time.time())}.md",
+                                       mime="text/markdown", key="dir_dl_md")
+
+                save_scan("DirectoryBrutePro", db_url, report.to_dict(), report.risk_score)
+
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
 
 # =========================================================
 # TAB 9: TECH FINGERPRINT
