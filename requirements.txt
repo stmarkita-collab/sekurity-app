@@ -2,5 +2,5 @@ streamlit
 requests
 certifi
 urllib3
-python-whois
 dnspython
+beautifulsoup4
